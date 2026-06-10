@@ -1,0 +1,1 @@
+uv run python -m mario_ppo.train --timesteps 1000000 --n-envs 4 --run-name ppo_level1_1_1m

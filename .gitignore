@@ -1,0 +1,57 @@
+# Python bytecode/caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments and local package managers
+.venv/
+venv/
+env/
+.uv-cache/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test, type-checker, and lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local config/secrets
+.env
+.env.*
+!.env.example
+
+# Matplotlib and notebook caches
+.matplotlib/
+.ipynb_checkpoints/
+
+# Training outputs
+runs/
+logs/
+models/
+videos/
+wandb/
+
+# RL/model artifacts generated outside ignored run dirs
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.tfevents.*
+events.out.tfevents.*
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
