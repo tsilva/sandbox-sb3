@@ -120,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate Mario PPO or scripted baselines")
     parser.add_argument("--model", help="Path to PPO .zip model")
     parser.add_argument("--policy", choices=["random", "right", "noop"], default="random")
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
@@ -133,15 +133,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
-    parser.add_argument("--stochastic", action="store_true", help="Sample from the policy")
+    parser.add_argument(
+        "--stochastic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Sample from the policy; use --no-stochastic for deterministic argmax eval.",
+    )
     parser.add_argument("--use-retro-reward", action="store_true")
     parser.add_argument(
-        "--reward-mode", choices=["bounded", "additive", "score"], default="bounded"
+        "--reward-mode",
+        choices=["baseline", "bounded", "additive", "score"],
+        default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
-    parser.add_argument("--terminal-reward", type=float, default=30.0)
-    parser.add_argument("--reward-scale", type=float, default=30.0)
+    parser.add_argument("--terminal-reward", type=float, default=50.0)
+    parser.add_argument("--reward-scale", type=float, default=10.0)
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)

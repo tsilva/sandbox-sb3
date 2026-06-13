@@ -374,7 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force", action="store_true", help="Re-evaluate checkpoints already logged"
     )
-    parser.add_argument("--episodes", type=int, default=50)
+    parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
@@ -390,12 +390,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
     parser.add_argument("--action-set", choices=["simple", "right"], default="right")
     parser.add_argument(
-        "--reward-mode", choices=["bounded", "additive", "score"], default="bounded"
+        "--reward-mode",
+        choices=["baseline", "bounded", "additive", "score"],
+        default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
-    parser.add_argument("--terminal-reward", type=float, default=30.0)
-    parser.add_argument("--reward-scale", type=float, default=30.0)
+    parser.add_argument("--terminal-reward", type=float, default=50.0)
+    parser.add_argument("--reward-scale", type=float, default=10.0)
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)

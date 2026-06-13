@@ -33,8 +33,8 @@ def parse_states(value: str) -> tuple[str, ...]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train PPO on SuperMarioBros-Nes-v0")
     parser.add_argument("--timesteps", type=int, default=1_000_000)
-    parser.add_argument("--n-envs", type=int, default=64)
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--n-envs", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--run-name", default="ppo_level1_1")
     parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--state", default="Level1-1")
@@ -75,28 +75,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-video-fps", type=float, default=30.0)
     parser.add_argument("--eval-video-scale", type=int, default=4)
     parser.add_argument("--checkpoint-freq", type=int, default=100_000)
-    parser.add_argument("--learning-rate", type=float, default=2.5e-4)
-    parser.add_argument("--n-steps", type=int, default=128)
-    parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--n-epochs", type=int, default=2)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--n-steps", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--n-epochs", type=int, default=10)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.9)
+    parser.add_argument("--gae-lambda", type=float, default=1.0)
     parser.add_argument("--ent-coef", type=float, default=0.01)
+    parser.add_argument("--vf-coef", type=float, default=1.0)
     parser.add_argument("--clip-range", type=float, default=0.2)
+    parser.add_argument(
+        "--normalize-advantage",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Normalize PPO advantages before policy updates.",
+    )
+    parser.add_argument("--adam-eps", type=float, default=1e-8)
     parser.add_argument("--target-kl", type=float, default=None)
     parser.add_argument("--use-retro-reward", action="store_true")
     parser.add_argument("--clip-rewards", action="store_true")
     parser.add_argument(
         "--reward-mode",
-        choices=["bounded", "additive", "score"],
-        default="bounded",
-        help="bounded uses capped progress; additive is legacy shaping; score adds emulator reward and score deltas.",
+        choices=["baseline", "bounded", "additive", "score"],
+        default="baseline",
+        help="baseline matches the upstream score/env reward; bounded uses capped progress; additive is legacy shaping; score adds emulator reward and score deltas.",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
-    parser.add_argument("--terminal-reward", type=float, default=30.0)
-    parser.add_argument("--reward-scale", type=float, default=30.0)
+    parser.add_argument("--terminal-reward", type=float, default=50.0)
+    parser.add_argument("--reward-scale", type=float, default=10.0)
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
@@ -307,10 +315,15 @@ def apply_resume_hyperparameters(model: PPO, args: argparse.Namespace) -> None:
     model.learning_rate = args.learning_rate
     model.lr_schedule = get_schedule_fn(args.learning_rate)
     model.ent_coef = args.ent_coef
+    model.vf_coef = args.vf_coef
     model.n_epochs = args.n_epochs
     model.batch_size = args.batch_size
     model.clip_range = get_schedule_fn(args.clip_range)
+    model.normalize_advantage = args.normalize_advantage
     model.target_kl = args.target_kl
+    model.policy.optimizer.defaults["eps"] = args.adam_eps
+    for param_group in model.policy.optimizer.param_groups:
+        param_group["eps"] = args.adam_eps
 
 
 def main() -> None:
@@ -367,8 +380,11 @@ def main() -> None:
             gamma=args.gamma,
             gae_lambda=args.gae_lambda,
             ent_coef=args.ent_coef,
+            vf_coef=args.vf_coef,
             clip_range=args.clip_range,
+            normalize_advantage=args.normalize_advantage,
             target_kl=args.target_kl,
+            policy_kwargs={"optimizer_kwargs": {"eps": args.adam_eps}},
             tensorboard_log=run_dir,
             device=device,
             verbose=1,

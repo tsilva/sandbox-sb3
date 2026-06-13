@@ -77,11 +77,11 @@ class EnvConfig:
     obs_resize_algorithm: str = DEFAULT_OBS_RESIZE_ALGORITHM
     use_retro_reward: bool = False
     clip_rewards: bool = False
-    reward_mode: str = "bounded"
+    reward_mode: str = "baseline"
     progress_reward_cap: float = 30.0
     progress_reward_scale: float = 1.0
-    terminal_reward: float = 30.0
-    reward_scale: float = 30.0
+    terminal_reward: float = 50.0
+    reward_scale: float = 10.0
     time_penalty: float = 0.0
     death_penalty: float = 25.0
     completion_reward: float = 0.0
@@ -314,6 +314,13 @@ class VecMarioProgressInfo(VecEnvWrapper):
             if died:
                 raw_reward = -config.terminal_reward
             shaped_reward = raw_reward / config.reward_scale if config.reward_scale else raw_reward
+        elif config.reward_mode == "baseline":
+            raw_reward = float(native_reward) + float(score_delta) / 40.0
+            if completion_event:
+                raw_reward += config.terminal_reward
+            elif died or done:
+                raw_reward -= config.terminal_reward
+            shaped_reward = raw_reward / config.reward_scale if config.reward_scale else raw_reward
         elif config.reward_mode == "score":
             shaped_reward = (
                 (float(native_reward) if config.use_retro_reward else 0.0)
@@ -389,11 +396,11 @@ class MarioProgressInfo(gym.Wrapper):
         self,
         env: gym.Env,
         use_retro_reward: bool = False,
-        reward_mode: str = "bounded",
+        reward_mode: str = "baseline",
         progress_reward_cap: float = 30.0,
         progress_reward_scale: float = 1.0,
-        terminal_reward: float = 30.0,
-        reward_scale: float = 30.0,
+        terminal_reward: float = 50.0,
+        reward_scale: float = 10.0,
         time_penalty: float = 0.0,
         death_penalty: float = 25.0,
         completion_reward: float = 0.0,
@@ -404,8 +411,8 @@ class MarioProgressInfo(gym.Wrapper):
     ):
         super().__init__(env)
         self.use_retro_reward = use_retro_reward
-        if reward_mode not in {"bounded", "additive", "score"}:
-            raise ValueError("reward_mode must be 'bounded', 'additive', or 'score'")
+        if reward_mode not in {"baseline", "bounded", "additive", "score"}:
+            raise ValueError("reward_mode must be 'baseline', 'bounded', 'additive', or 'score'")
         if progress_reward_cap < 0:
             raise ValueError("progress_reward_cap must be >= 0")
         if terminal_reward < 0:
@@ -530,6 +537,16 @@ class MarioProgressInfo(gym.Wrapper):
             shaped_reward = (
                 clipped_reward / self.reward_scale if self.reward_scale > 0 else clipped_reward
             )
+        elif self.reward_mode == "baseline":
+            raw_reward = float(reward) + score_delta / 40.0
+            if completion_event:
+                terminal_reward = self.terminal_reward
+                raw_reward += terminal_reward
+            elif died or terminated:
+                terminal_reward = -self.terminal_reward
+                raw_reward += terminal_reward
+            clipped_reward = raw_reward
+            shaped_reward = raw_reward / self.reward_scale if self.reward_scale > 0 else raw_reward
         else:
             if self.reward_mode == "score":
                 raw_reward = float(reward) + score_delta / 40.0

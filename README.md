@@ -66,18 +66,31 @@ uv run python -m mario_ppo.train \
   --wandb-project mario-ppo
 ```
 
-Current local Apple Silicon throughput defaults are tuned for this machine:
+Current training defaults mimic the upstream baseline hyperparameters from
+`BASELINE.md` while keeping SB3's `CnnPolicy` model:
 
 ```text
 device=auto -> mps
-n_envs=64
-n_steps=128
-batch_size=1024
-n_epochs=2
+n_envs=8
+seed=123
+n_steps=512
+batch_size=256
+n_epochs=10
+learning_rate=1e-4
+gamma=0.9
+gae_lambda=1.0
+ent_coef=0.01
+vf_coef=1.0
+clip_range=0.2
+normalize_advantage=False
+adam_eps=1e-8
+action_set=simple
+reward_mode=baseline
 ```
 
-That collects `8192` env steps per PPO update and runs best with native
-stable-retro preprocessing enabled.
+That collects `4096` env steps per PPO update. The previous 64-env MPS setup
+was faster for raw throughput, but these defaults prioritize matching the
+working upstream PPO recipe.
 
 W&B offline smoke run:
 
@@ -100,6 +113,8 @@ uv run python -m mario_ppo.evaluate --policy random --episodes 20
 uv run python -m mario_ppo.evaluate --policy right --episodes 20
 ```
 
+Model evaluation defaults to 20 stochastic episodes. Use `--no-stochastic` for deterministic argmax evaluation.
+
 Training-loop eval is disabled by default. Robust eval is handled out of process from checkpoint artifacts so training throughput is not blocked. The local checkpoint evaluator tracks Mario-specific progress metrics in addition to reward:
 
 - `eval/max_x_mean` and `eval/max_x_max`
@@ -118,19 +133,20 @@ runs/local_evals/<run-name>/videos/best_episode_<timesteps>_steps.mp4
 
 For `Level1-1`, `--completion-x-threshold` defaults to `3160`. Set it to `0` if you only want to count completion when stable-retro reports a level change.
 
-Training uses wrapper-computed forward progress reward by default. Progress is tracked on a monotonic global coordinate across level changes: when stable-retro reports a new `levelHi/levelLo`, the wrapper freezes the previous level's best x-position as the next level's baseline and rewards new progress on top of it.
+Training uses the upstream-style score/env reward by default. Progress metrics
+are still tracked on a monotonic global coordinate across level changes for
+logging and evaluation.
 
-The default reward mode is bounded SuperMarioRL-style shaping:
+The default `baseline` reward mode is:
 
 ```text
-progress = min(max(0, new_global_max_x - previous_global_max_x), 30)
-raw_reward = progress
-if died: raw_reward = -30
-elif completed_level: raw_reward = 30
-reward = clip(raw_reward, -30, 30) / 30
+raw_reward = env_reward + score_delta / 40
+if completed_level: raw_reward += 50
+elif died_or_done: raw_reward -= 50
+reward = raw_reward / 10
 ```
 
-Use `--reward-mode additive` to restore the older additive death/completion shaping. For legacy additive level-completion runs, prefer adding a large one-time completion reward and a death penalty large enough that dying near the end is worse than finishing:
+Use `--reward-mode bounded` for the older SuperMarioRL-style capped progress reward, or `--reward-mode additive` to restore the older additive death/completion shaping. For legacy additive level-completion runs, prefer adding a large one-time completion reward and a death penalty large enough that dying near the end is worse than finishing:
 
 ```bash
 --death-penalty 250 \

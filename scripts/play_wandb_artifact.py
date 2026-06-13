@@ -28,11 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--stochastic", action="store_true")
-    parser.add_argument("--reward-mode", choices=["bounded", "additive", "score"], default="bounded")
+    parser.add_argument(
+        "--reward-mode",
+        choices=["baseline", "bounded", "additive", "score"],
+        default="baseline",
+    )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
-    parser.add_argument("--terminal-reward", type=float, default=30.0)
-    parser.add_argument("--reward-scale", type=float, default=30.0)
+    parser.add_argument("--terminal-reward", type=float, default=50.0)
+    parser.add_argument("--reward-scale", type=float, default=10.0)
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)

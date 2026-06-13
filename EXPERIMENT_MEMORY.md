@@ -5,8 +5,8 @@ Goal: train PPO on `SuperMarioBros-Nes-v0` until Mario reaches maximum reward / 
 ## Current Findings
 
 - The original stable-retro scenario reward was defective for training: `scenario.json` rewards only `xscrollLo`, the low byte of scroll position, which wraps every 256 pixels.
-- Training now ignores retro reward by default and uses wrapper-computed global x-position progress.
-- Reward mode now defaults to SuperMarioRL-style bounded rewards: `reward = clip(terminal_or_capped_progress, -30, 30) / 30`, where progress is `min(new_global_max_x_delta, 30)`, death overrides to `-30`, and level completion overrides to `+30`. The legacy additive shaping remains available with `--reward-mode additive`.
+- Training now defaults to the upstream-baseline score/env reward style while keeping wrapper-computed global x-position metrics for logging and checkpoint selection.
+- Reward mode now defaults to `baseline`: `reward = (env_reward + score_delta / 40 + terminal_bonus) / 10`, with `+50` for completion and `-50` for death/native done without completion. The bounded SuperMarioRL-style capped-progress reward remains available with `--reward-mode bounded`, and the legacy additive shaping remains available with `--reward-mode additive`.
 - Reward-progress correction after level changes: `levelHi/levelLo` changes now freeze the prior level's best x-position into `completed_level_base`, reset within-level x tracking, and keep rewarding new progress on top of the global baseline. This avoids the old post-level-change tail where `xscrollHi/xscrollLo` reset to zero and the agent received no progress reward after completing a level.
 - For level-1-only training, use `--terminate-on-level-change --completion-x-threshold 0`: real `levelHi/levelLo` transitions mark completion, pay the bounded positive terminal reward, and end the episode immediately instead of continuing into later levels or using a near-end x-threshold proxy.
 - Episodes now terminate on first life loss by default, preventing repeated early-progress farming after death.
@@ -518,7 +518,7 @@ Main lesson:
 
 - `torch==2.12.0` macOS arm64 reported MPS unavailable on macOS `26.5.1` even though MPS was built into the wheel. Pinning local Apple Silicon to `torch==2.11.0` fixed actual `mps:0` tensor execution.
 - SB3's `device="auto"` resolves to CPU even when MPS is available, so local code now resolves `auto` as CUDA, then MPS, then CPU before passing the device to SB3.
-- Training defaults were updated for the local machine: `n_envs=64`, `n_steps=128`, `batch_size=1024`, `n_epochs=2`, `device=auto -> mps`.
+- Historical throughput-tuned local defaults from this sweep were `n_envs=64`, `n_steps=128`, `batch_size=1024`, `n_epochs=2`, `device=auto -> mps`. These were later replaced as defaults by the baseline-mimic settings below, but remain useful for raw-throughput comparisons.
 - Stable-retro-turbo native preprocessing remains: HUD crop `(32, 0, 0, 0)`, resize `84x84` with `area`, grayscale, frame skip `4`, frame stack `4`, max-pool last two frames, audio disabled for benchmarks.
 - Benchmark sweep on `SuperMarioBros-Nes-v0`, `action_set=right`, native vec env, MPS:
   - `16 envs`, `128 steps`, `batch 1024`, `1 epoch`: `935.4` env steps/s.
@@ -529,7 +529,14 @@ Main lesson:
   - `64 envs`, `128 steps`, `batch 1024`, `4 epochs`: `991.5` env steps/s.
   - `64 envs`, `64 steps`, `batch 1024`, `2 epochs`: `1089.8` env steps/s.
   - `96 envs`, `128 steps`, `batch 1024`, `2 epochs`: `1006.0` env steps/s.
-- Current recommendation: use `64 envs / 128 n_steps / batch 1024 / 2 PPO epochs / MPS` for local training. It keeps more PPO reuse than `1 epoch` while staying close to the best observed throughput.
+- Raw-throughput recommendation from this sweep remains `64 envs / 128 n_steps / batch 1024 / 2 PPO epochs / MPS`, but current default training now prioritizes the upstream baseline recipe instead.
+
+## 2026-06-13 Baseline-Mimic Defaults
+
+- Updated local and Modal training defaults to mimic `BASELINE.md` except for the model architecture, which remains SB3 `CnnPolicy`.
+- New default PPO/training shape: `action_set=simple`, `n_envs=8`, `seed=123`, `learning_rate=1e-4`, `gamma=0.9`, `gae_lambda=1.0`, `n_epochs=10`, `n_steps=512`, `batch_size=256`, `ent_coef=0.01`, `vf_coef=1.0`, `clip_range=0.2`, `normalize_advantage=False`, `adam_eps=1e-8`.
+- Added `reward_mode=baseline` to match the upstream reward style: `env_reward + score_delta / 40`, terminal `+50/-50`, then `/10`. The prior bounded progress reward remains available with `--reward-mode bounded`.
+- This default collects `4096` aggregate policy decisions per PPO update, matching the upstream baseline's `8 * 512` rollout geometry. The native stable-retro-turbo preprocessing path and SB3/NatureCNN policy architecture remain different from the upstream repo. SB3 still uses MSE value loss; matching the upstream SmoothL1 value loss would require a custom PPO train loop/subclass.
 
 ## 2026-06-13 Local MPS Native 1M Run
 
