@@ -3,12 +3,17 @@ name = "mario-ppo"
 version = "0.1.0"
 description = "PPO training scaffold for SuperMarioBros-Nes-v0 with stable-retro-apple-silicon"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.14,<3.15"
 dependencies = [
-    "stable-retro-apple-silicon==0.9.9.post2",
+    "stable-retro-apple-silicon==1.0.0.post20; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
     "stable-baselines3[extra]>=2.3,<3",
     "tensorboard>=2.16,<3",
     "wandb>=0.18,<0.23",
+]
+
+[project.optional-dependencies]
+modal = [
+    "modal>=1.1,<2",
 ]
 
 [project.scripts]
@@ -32,4 +37,4 @@ constraint-dependencies = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"

@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environments and local package managers
 .venv/
+.venv*/
 venv/
 env/
 .uv-cache/
@@ -28,6 +29,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.modal/
+sky_*.yaml
 
 # Matplotlib and notebook caches
 .matplotlib/
