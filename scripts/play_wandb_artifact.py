@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
+    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
+    parser.add_argument("--no-progress-min-delta", type=int, default=0)
     parser.add_argument("--completion-x-threshold", type=int, default=0)
     parser.add_argument("--no-terminate-on-life-loss", action="store_true")
     parser.add_argument("--terminate-on-level-change", action="store_true")
@@ -113,9 +116,15 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
         str(args.death_penalty),
         "--completion-reward",
         str(args.completion_reward),
+        "--no-progress-timeout-steps",
+        str(args.no_progress_timeout_steps),
+        "--no-progress-min-delta",
+        str(args.no_progress_min_delta),
         "--completion-x-threshold",
         str(args.completion_x_threshold),
     ]
+    if args.score_progress_clipped:
+        cmd.append("--score-progress-clipped")
     if args.stochastic:
         cmd.append("--stochastic")
     if not args.max_pool_frames:

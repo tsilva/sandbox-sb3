@@ -148,6 +148,9 @@ def train_remote(
     time_penalty: float = 0.0,
     death_penalty: float = 25.0,
     completion_reward: float = 0.0,
+    score_progress_clipped: bool = False,
+    no_progress_timeout_steps: int = 0,
+    no_progress_min_delta: int = 0,
     no_terminate_on_life_loss: bool = False,
     terminate_on_level_change: bool = False,
     terminate_on_completion: bool = False,
@@ -254,9 +257,15 @@ def train_remote(
         str(death_penalty),
         "--completion-reward",
         str(completion_reward),
+        "--no-progress-timeout-steps",
+        str(no_progress_timeout_steps),
+        "--no-progress-min-delta",
+        str(no_progress_min_delta),
         "--action-set",
         action_set,
     ]
+    if score_progress_clipped:
+        cmd.append("--score-progress-clipped")
     if max_pool_frames:
         cmd.append("--max-pool-frames")
     else:
@@ -589,6 +598,9 @@ def train(
     time_penalty: float = 0.0,
     death_penalty: float = 25.0,
     completion_reward: float = 0.0,
+    score_progress_clipped: bool = False,
+    no_progress_timeout_steps: int = 0,
+    no_progress_min_delta: int = 0,
     no_terminate_on_life_loss: bool = False,
     terminate_on_level_change: bool = False,
     terminate_on_completion: bool = False,
@@ -640,6 +652,9 @@ def train(
         time_penalty=time_penalty,
         death_penalty=death_penalty,
         completion_reward=completion_reward,
+        score_progress_clipped=score_progress_clipped,
+        no_progress_timeout_steps=no_progress_timeout_steps,
+        no_progress_min_delta=no_progress_min_delta,
         no_terminate_on_life_loss=no_terminate_on_life_loss,
         terminate_on_level_change=terminate_on_level_change,
         terminate_on_completion=terminate_on_completion,

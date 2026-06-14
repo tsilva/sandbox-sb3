@@ -85,6 +85,9 @@ class EnvConfig:
     time_penalty: float = 0.0
     death_penalty: float = 25.0
     completion_reward: float = 0.0
+    score_progress_clipped: bool = False
+    no_progress_timeout_steps: int = 0
+    no_progress_min_delta: int = 0
     completion_x_threshold: int = 0
     terminate_on_life_loss: bool = True
     terminate_on_level_change: bool = False
@@ -154,6 +157,7 @@ class VecMarioProgressInfo(VecEnvWrapper):
         self.current_level_completion_awarded = np.zeros(n_envs, dtype=bool)
         self.completed = np.zeros(n_envs, dtype=bool)
         self.episode_steps = np.zeros(n_envs, dtype=np.int64)
+        self.last_progress_step = np.zeros(n_envs, dtype=np.int64)
 
     def reset(self):
         obs = self.venv.reset()
@@ -182,6 +186,7 @@ class VecMarioProgressInfo(VecEnvWrapper):
             self.current_level_completion_awarded[index] = False
             self.completed[index] = False
             self.episode_steps[index] = 0
+            self.last_progress_step[index] = 0
 
     def step_async(self, actions):
         self.venv.step_async(actions)
@@ -204,6 +209,16 @@ class VecMarioProgressInfo(VecEnvWrapper):
                 custom_dones[index] = True
                 info["_custom_truncated"] = True
                 info["TimeLimit.truncated"] = True
+            if (
+                self.config.no_progress_timeout_steps > 0
+                and not info.get("_custom_done", False)
+                and self.episode_steps[index] - self.last_progress_step[index]
+                >= self.config.no_progress_timeout_steps
+            ):
+                custom_dones[index] = True
+                info["_custom_truncated"] = True
+                info["TimeLimit.truncated"] = True
+                info["no_progress_truncated"] = True
             if info.pop("_custom_done", False):
                 custom_dones[index] = True
 
@@ -270,6 +285,8 @@ class VecMarioProgressInfo(VecEnvWrapper):
         global_max_x_pos = int(self.completed_level_base[index] + self.level_max_x_pos[index])
         progress_delta = max(0, global_max_x_pos - int(self.max_global_x_pos[index]))
         self.max_global_x_pos[index] = max(int(self.max_global_x_pos[index]), global_max_x_pos)
+        if progress_delta > config.no_progress_min_delta:
+            self.last_progress_step[index] = self.episode_steps[index]
 
         threshold_complete = (
             config.completion_x_threshold > 0
@@ -323,9 +340,12 @@ class VecMarioProgressInfo(VecEnvWrapper):
                 raw_reward -= config.terminal_reward
             shaped_reward = raw_reward / config.reward_scale if config.reward_scale else raw_reward
         elif config.reward_mode == "score":
+            progress_component = (
+                progress_reward if config.score_progress_clipped else float(progress_delta)
+            )
             shaped_reward = (
                 (float(native_reward) if config.use_retro_reward else 0.0)
-                + config.progress_reward_scale * float(progress_delta)
+                + config.progress_reward_scale * progress_component
                 + 0.01 * float(score_delta)
             )
             if completion_event:
@@ -350,6 +370,7 @@ class VecMarioProgressInfo(VecEnvWrapper):
         info["level_max_x_pos"] = int(self.level_max_x_pos[index])
         info["progress_delta"] = int(progress_delta)
         info["progress_reward"] = float(progress_reward)
+        info["score_progress_clipped"] = config.score_progress_clipped
         info["score_delta"] = int(score_delta)
         info["level_changed"] = level_changed
         info["level_complete"] = bool(completion_event)
@@ -405,6 +426,9 @@ class MarioProgressInfo(gym.Wrapper):
         time_penalty: float = 0.0,
         death_penalty: float = 25.0,
         completion_reward: float = 0.0,
+        score_progress_clipped: bool = False,
+        no_progress_timeout_steps: int = 0,
+        no_progress_min_delta: int = 0,
         completion_x_threshold: int = 0,
         terminate_on_life_loss: bool = True,
         terminate_on_level_change: bool = False,
@@ -420,6 +444,10 @@ class MarioProgressInfo(gym.Wrapper):
             raise ValueError("terminal_reward must be >= 0")
         if reward_scale < 0:
             raise ValueError("reward_scale must be >= 0")
+        if no_progress_timeout_steps < 0:
+            raise ValueError("no_progress_timeout_steps must be >= 0")
+        if no_progress_min_delta < 0:
+            raise ValueError("no_progress_min_delta must be >= 0")
         self.reward_mode = reward_mode
         self.progress_reward_cap = progress_reward_cap
         self.progress_reward_scale = progress_reward_scale
@@ -428,6 +456,9 @@ class MarioProgressInfo(gym.Wrapper):
         self.time_penalty = time_penalty
         self.death_penalty = death_penalty
         self.completion_reward = completion_reward
+        self.score_progress_clipped = score_progress_clipped
+        self.no_progress_timeout_steps = no_progress_timeout_steps
+        self.no_progress_min_delta = no_progress_min_delta
         self.completion_x_threshold = completion_x_threshold
         self.terminate_on_life_loss = terminate_on_life_loss
         self.terminate_on_level_change = terminate_on_level_change
@@ -443,6 +474,8 @@ class MarioProgressInfo(gym.Wrapper):
         self.completed_level_count = 0
         self.current_level_completion_awarded = False
         self.completed = False
+        self.episode_steps = 0
+        self.last_progress_step = 0
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -463,10 +496,13 @@ class MarioProgressInfo(gym.Wrapper):
         self.completed_level_count = 0
         self.current_level_completion_awarded = False
         self.completed = False
+        self.episode_steps = 0
+        self.last_progress_step = 0
         return obs, info
 
     def step(self, action: Any):
         obs, reward, terminated, truncated, info = self.env.step(action)
+        self.episode_steps += 1
         x_pos = int(info.get("xscrollHi", 0)) * 256 + int(info.get("xscrollLo", 0))
         lives = info.get("lives")
         level = (int(info.get("levelHi", 0)), int(info.get("levelLo", 0)))
@@ -491,6 +527,8 @@ class MarioProgressInfo(gym.Wrapper):
         global_max_x_pos = self.completed_level_base + self.level_max_x_pos
         progress_delta = max(0, global_max_x_pos - self.max_global_x_pos)
         self.max_global_x_pos = max(self.max_global_x_pos, global_max_x_pos)
+        if progress_delta > self.no_progress_min_delta:
+            self.last_progress_step = self.episode_steps
 
         threshold_complete = (
             self.completion_x_threshold > 0 and self.level_max_x_pos >= self.completion_x_threshold
@@ -550,17 +588,28 @@ class MarioProgressInfo(gym.Wrapper):
             shaped_reward = raw_reward / self.reward_scale if self.reward_scale > 0 else raw_reward
         else:
             if self.reward_mode == "score":
-                raw_reward = float(reward) + score_delta / 40.0
-                if died:
-                    terminal_reward = -self.terminal_reward
-                    raw_reward += terminal_reward
-                elif completion_event:
-                    terminal_reward = self.terminal_reward
-                    raw_reward += terminal_reward
-                clipped_reward = raw_reward
-                shaped_reward = (
-                    raw_reward / self.reward_scale if self.reward_scale > 0 else raw_reward
-                )
+                if self.score_progress_clipped:
+                    raw_reward = self.progress_reward_scale * progress_reward + 0.01 * score_delta
+                    if self.use_retro_reward:
+                        raw_reward += float(reward)
+                    if died:
+                        raw_reward -= self.death_penalty
+                    elif completion_event:
+                        raw_reward += self.completion_reward
+                    clipped_reward = raw_reward
+                    shaped_reward = raw_reward
+                else:
+                    raw_reward = float(reward) + score_delta / 40.0
+                    if died:
+                        terminal_reward = -self.terminal_reward
+                        raw_reward += terminal_reward
+                    elif completion_event:
+                        terminal_reward = self.terminal_reward
+                        raw_reward += terminal_reward
+                    clipped_reward = raw_reward
+                    shaped_reward = (
+                        raw_reward / self.reward_scale if self.reward_scale > 0 else raw_reward
+                    )
             else:
                 raw_reward = self.progress_reward_scale * progress_delta - self.time_penalty
                 if self.use_retro_reward:
@@ -572,6 +621,14 @@ class MarioProgressInfo(gym.Wrapper):
                     raw_reward -= self.death_penalty
                 clipped_reward = raw_reward
                 shaped_reward = raw_reward
+
+        if (
+            self.no_progress_timeout_steps > 0
+            and not terminated
+            and not truncated
+            and self.episode_steps - self.last_progress_step >= self.no_progress_timeout_steps
+        ):
+            truncated = True
 
         info = dict(info)
         info["x_pos"] = global_x_pos
@@ -593,6 +650,7 @@ class MarioProgressInfo(gym.Wrapper):
         info["completion_bonus"] = completion_bonus
         info["reward_mode"] = self.reward_mode
         info["progress_reward"] = progress_reward
+        info["score_progress_clipped"] = self.score_progress_clipped
         info["score_delta"] = score_delta
         info["terminal_reward"] = terminal_reward
         info["raw_reward"] = raw_reward
@@ -600,6 +658,11 @@ class MarioProgressInfo(gym.Wrapper):
         info["reward_scale"] = self.reward_scale
         info["time_penalty"] = self.time_penalty
         info["shaped_reward"] = shaped_reward
+        info["no_progress_truncated"] = bool(
+            truncated
+            and self.no_progress_timeout_steps > 0
+            and self.episode_steps - self.last_progress_step >= self.no_progress_timeout_steps
+        )
         info["died"] = died
         if died:
             info["death_x_pos"] = self.max_global_x_pos
@@ -666,6 +729,9 @@ def make_fast_mario_env(config: EnvConfig | None = None, seed: int | None = None
         time_penalty=config.time_penalty,
         death_penalty=config.death_penalty,
         completion_reward=config.completion_reward,
+        score_progress_clipped=config.score_progress_clipped,
+        no_progress_timeout_steps=config.no_progress_timeout_steps,
+        no_progress_min_delta=config.no_progress_min_delta,
         completion_x_threshold=config.completion_x_threshold,
         terminate_on_life_loss=config.terminate_on_life_loss,
         terminate_on_level_change=config.terminate_on_level_change,
@@ -700,6 +766,9 @@ def wrap_mario_env(env: gym.Env, config: EnvConfig, seed: int | None = None) -> 
         time_penalty=config.time_penalty,
         death_penalty=config.death_penalty,
         completion_reward=config.completion_reward,
+        score_progress_clipped=config.score_progress_clipped,
+        no_progress_timeout_steps=config.no_progress_timeout_steps,
+        no_progress_min_delta=config.no_progress_min_delta,
         completion_x_threshold=config.completion_x_threshold,
         terminate_on_life_loss=config.terminate_on_life_loss,
         terminate_on_level_change=config.terminate_on_level_change,

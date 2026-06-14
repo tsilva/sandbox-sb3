@@ -162,6 +162,9 @@ def evaluate_checkpoint(
         time_penalty=args.time_penalty,
         death_penalty=args.death_penalty,
         completion_reward=args.completion_reward,
+        score_progress_clipped=args.score_progress_clipped,
+        no_progress_timeout_steps=args.no_progress_timeout_steps,
+        no_progress_min_delta=args.no_progress_min_delta,
         completion_x_threshold=args.completion_x_threshold,
         terminate_on_life_loss=not args.no_terminate_on_life_loss,
         terminate_on_level_change=args.terminate_on_level_change,
@@ -406,6 +409,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
+    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
+    parser.add_argument("--no-progress-min-delta", type=int, default=0)
     parser.add_argument("--no-terminate-on-life-loss", action="store_true")
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
