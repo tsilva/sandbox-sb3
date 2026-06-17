@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
-from mario_ppo.env import EnvConfig, make_mario_env, make_vec_envs
+from mario_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
 
 
 def write_video(frames: list[np.ndarray], output: Path, fps: float, scale: int) -> None:
@@ -54,6 +54,63 @@ def episode_rank(result: dict[str, Any]) -> tuple[int, float, float]:
     )
 
 
+def single_env_action(action) -> int | np.ndarray:
+    action_array = np.asarray(action)
+    if action_array.shape == ():
+        return int(action_array)
+    first = np.asarray(action_array[0])
+    if first.shape == ():
+        return int(first)
+    return first.astype(np.int8, copy=True)
+
+
+def summarize_episode_results(
+    episode_results: list[dict[str, Any]],
+    *,
+    deterministic: bool,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not episode_results:
+        raise ValueError("episode_results must not be empty")
+
+    rewards = np.array([episode["reward"] for episode in episode_results], dtype=np.float64)
+    max_x_positions = np.array(
+        [episode["max_x_pos"] for episode in episode_results],
+        dtype=np.float64,
+    )
+    max_level_x_positions = np.array(
+        [episode["max_level_x_pos"] for episode in episode_results],
+        dtype=np.float64,
+    )
+    death_x_positions = [
+        int(episode["death_x_pos"])
+        for episode in episode_results
+        if episode.get("death_x_pos") is not None
+    ]
+    completion_count = sum(1 for episode in episode_results if episode["level_complete"])
+    death_count = sum(1 for episode in episode_results if episode["died"])
+    metrics: dict[str, Any] = {
+        "episodes": len(episode_results),
+        "deterministic": deterministic,
+        "reward_mean": float(rewards.mean()),
+        "reward_std": float(rewards.std()),
+        "reward_max": float(rewards.max()),
+        "max_x_mean": float(max_x_positions.mean()),
+        "max_x_max": int(max_x_positions.max()),
+        "max_level_x_mean": float(max_level_x_positions.mean()),
+        "max_level_x_max": int(max_level_x_positions.max()),
+        "completion_count": completion_count,
+        "completion_rate": completion_count / len(episode_results),
+        "death_count": death_count,
+        "death_rate": death_count / len(episode_results),
+        "death_x_histogram": death_location_histogram(death_x_positions),
+        "episode_results": episode_results,
+    }
+    if extra:
+        metrics = {**extra, **metrics}
+    return metrics
+
+
 def run_eval_episode(
     env,
     model,
@@ -65,7 +122,7 @@ def run_eval_episode(
 ) -> dict[str, Any]:
     env.seed(seed)
     obs = env.reset()
-    actions: list[int] = []
+    actions: list[Any] = []
     total_reward = 0.0
     max_x_pos = 0
     max_level_x_pos = 0
@@ -75,9 +132,9 @@ def run_eval_episode(
 
     for step_idx in range(max_steps):
         action, _ = model.predict(obs, deterministic=deterministic)
-        action_int = int(action[0])
+        action_value = single_env_action(action)
         if capture_actions:
-            actions.append(action_int)
+            actions.append(action_value)
         obs, rewards, dones, infos = env.step(action)
         info = dict(infos[0])
         terminated = bool(dones[0])
@@ -113,7 +170,7 @@ def run_eval_episode(
     }
 
 
-def replay_actions_for_video(env, actions: list[int], seed: int) -> list[np.ndarray]:
+def replay_actions_for_video(env, actions: list[Any], seed: int) -> list[np.ndarray]:
     env.reset(seed=seed)
     frames = [env.render()]
     for action in actions:
@@ -162,7 +219,7 @@ class MarioEvalCallback(BaseCallback):
         return True
 
     def evaluate(self) -> None:
-        eval_env = make_vec_envs(config=self.config, n_envs=1, seed=self.seed + self.num_timesteps)
+        eval_env = make_eval_vec_env(config=self.config, n_envs=1, seed=self.seed + self.num_timesteps)
         episode_results: list[dict[str, Any]] = []
         best_episode_result: dict[str, Any] | None = None
         best_episode_actions: list[int] = []
@@ -191,53 +248,29 @@ class MarioEvalCallback(BaseCallback):
         finally:
             eval_env.close()
 
-        rewards = np.array([episode["reward"] for episode in episode_results], dtype=np.float64)
-        max_x_positions = np.array(
-            [episode["max_x_pos"] for episode in episode_results],
-            dtype=np.float64,
-        )
-        max_level_x_positions = np.array(
-            [episode["max_level_x_pos"] for episode in episode_results],
-            dtype=np.float64,
-        )
         death_x_positions = [
             int(episode["death_x_pos"])
             for episode in episode_results
             if episode.get("death_x_pos") is not None
         ]
-        completion_count = sum(1 for episode in episode_results if episode["level_complete"])
-        death_count = sum(1 for episode in episode_results if episode["died"])
-        metrics: dict[str, Any] = {
-            "timesteps": self.num_timesteps,
-            "episodes": self.n_eval_episodes,
-            "deterministic": self.deterministic,
-            "reward_mean": float(rewards.mean()),
-            "reward_std": float(rewards.std()),
-            "reward_max": float(rewards.max()),
-            "max_x_mean": float(max_x_positions.mean()),
-            "max_x_max": int(max_x_positions.max()),
-            "max_level_x_mean": float(max_level_x_positions.mean()),
-            "max_level_x_max": int(max_level_x_positions.max()),
-            "completion_count": completion_count,
-            "completion_rate": completion_count / self.n_eval_episodes,
-            "death_count": death_count,
-            "death_rate": death_count / self.n_eval_episodes,
-            "death_x_histogram": death_location_histogram(death_x_positions),
-            "best_model_score": [
-                completion_count / self.n_eval_episodes,
-                int(max_x_positions.max()),
-                float(rewards.mean()),
-            ],
-            "best_episode": best_episode_result,
-            "episode_results": episode_results,
-        }
+        metrics = summarize_episode_results(
+            episode_results,
+            deterministic=self.deterministic,
+            extra={"timesteps": self.num_timesteps},
+        )
+        metrics["best_model_score"] = [
+            metrics["completion_rate"],
+            metrics["max_x_max"],
+            metrics["reward_mean"],
+        ]
+        metrics["best_episode"] = best_episode_result
 
         video_path = None
         if self.record_video and best_episode_actions and best_episode_seed is not None:
             video_path = (
                 self.run_dir / "eval_videos" / f"best_episode_{self.num_timesteps}_steps.mp4"
             )
-            video_env = make_mario_env(config=self.config, seed=best_episode_seed)
+            video_env = make_rendered_replay_env(config=self.config, seed=best_episode_seed)
             try:
                 best_episode_frames = replay_actions_for_video(
                     video_env,

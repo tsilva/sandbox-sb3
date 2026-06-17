@@ -17,7 +17,8 @@ import torch
 from stable_baselines3 import PPO
 
 from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import DEFAULT_HUD_CROP_TOP, EnvConfig, assert_rom_imported, make_mario_env
+from mario_ppo.env import DEFAULT_HUD_CROP_TOP, EnvConfig, assert_rom_imported, make_rendered_replay_env
+from mario_ppo.eval_metrics import single_env_action
 
 
 def stacked_obs(frames: deque[np.ndarray]) -> np.ndarray:
@@ -71,6 +72,7 @@ class PygameViewer:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Show a PPO checkpoint playing Mario in a GUI window")
     parser.add_argument("--model", default="runs/smoke_doc/final_model.zip")
+    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
@@ -90,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stochastic", action="store_true", help="Sample from the policy")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score"],
+        choices=["baseline", "bounded", "additive", "score", "native"],
         default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
@@ -107,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-terminate-on-life-loss", action="store_true")
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--action-set", choices=["simple", "right"], default="simple")
+    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
     return parser
 
 
@@ -116,6 +118,7 @@ def main() -> None:
     assert_rom_imported()
     model = PPO.load(args.model, device=resolve_sb3_device(args.device))
     config = EnvConfig(
+        game=args.game,
         state=args.state,
         frame_skip=args.frame_skip,
         max_pool_frames=args.max_pool_frames,
@@ -138,7 +141,7 @@ def main() -> None:
         terminate_on_completion=args.terminate_on_completion,
         action_set=args.action_set,
     )
-    env = make_mario_env(config=config, seed=args.seed)
+    env = make_rendered_replay_env(config=config, seed=args.seed)
     seed_rng = np.random.default_rng() if args.random_seeds else None
 
     obs, _ = env.reset(seed=args.seed)
@@ -175,7 +178,7 @@ def main() -> None:
             final_info = {}
             for step_idx in range(args.max_steps):
                 action, _ = model.predict(stacked_obs(frames), deterministic=not args.stochastic)
-                obs, reward, terminated, truncated, info = env.step(int(action[0]))
+                obs, reward, terminated, truncated, info = env.step(single_env_action(action))
                 frames.append(obs)
                 total_reward += float(reward)
                 max_x_pos = max(max_x_pos, int(info.get("max_x_pos", 0)))

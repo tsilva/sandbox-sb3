@@ -1,7 +1,7 @@
 [project]
 name = "mario-ppo"
 version = "0.1.0"
-description = "PPO training scaffold for SuperMarioBros-Nes-v0 with stable-retro-turbo"
+description = "PPO training scaffold for Stable Retro games with stable-retro-turbo"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
     "torch==2.11.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "tensorboard>=2.16,<3",
     "wandb>=0.18,<0.23",
+    "boto3>=1.34,<2",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,9 @@ modal = [
 mario-ppo-train = "mario_ppo.train:main"
 mario-ppo-evaluate = "mario_ppo.evaluate:main"
 mario-ppo-play = "mario_ppo.play:main"
+stable-retro-ppo-train = "mario_ppo.train:main"
+stable-retro-ppo-evaluate = "mario_ppo.evaluate:main"
+stable-retro-ppo-play = "mario_ppo.play:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -50,5 +54,6 @@ target-version = "py314"
 
 [dependency-groups]
 dev = [
+    "ruff>=0.15,<0.16",
     "skypilot[kubernetes]>=0.12.3,<0.13",
 ]

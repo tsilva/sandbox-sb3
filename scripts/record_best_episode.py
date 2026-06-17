@@ -13,7 +13,6 @@ from pathlib import Path
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
-import cv2
 import numpy as np
 import torch
 from stable_baselines3 import PPO
@@ -23,10 +22,10 @@ from mario_ppo.env import (
     DEFAULT_HUD_CROP_TOP,
     EnvConfig,
     assert_rom_imported,
-    make_mario_env,
-    make_vec_envs,
+    make_eval_vec_env,
+    make_rendered_replay_env,
 )
-from mario_ppo.eval_metrics import is_level_complete
+from mario_ppo.eval_metrics import episode_rank, replay_actions_for_video, run_eval_episode, write_video
 from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
@@ -70,100 +69,6 @@ def resolve_model_path(args: argparse.Namespace) -> Path:
     return model_path
 
 
-def write_video(frames: list[np.ndarray], output: Path, fps: float, scale: int) -> None:
-    if not frames:
-        raise ValueError("No frames to write")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    first_frame = frames[0]
-    height, width = first_frame.shape[:2]
-    out_size = (width * scale, height * scale)
-    writer = cv2.VideoWriter(
-        str(output),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        out_size,
-    )
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for {output}")
-    try:
-        for frame in frames:
-            if scale != 1:
-                frame = cv2.resize(frame, out_size, interpolation=cv2.INTER_NEAREST)
-            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    finally:
-        writer.release()
-
-
-def run_episode(
-    env,
-    model: PPO,
-    max_steps: int,
-    deterministic: bool,
-    seed: int,
-    completion_x_threshold: int,
-    capture_actions: bool,
-):
-    torch.manual_seed(seed)
-    env.seed(seed)
-    obs = env.reset()
-    actions: list[int] = []
-    total_reward = 0.0
-    max_x = 0
-    max_level_x = 0
-    final_info = {}
-
-    for step_idx in range(max_steps):
-        action, _ = model.predict(obs, deterministic=deterministic)
-        action_int = int(action[0])
-        if capture_actions:
-            actions.append(action_int)
-        obs, rewards, dones, infos = env.step(action)
-        info = dict(infos[0])
-        total_reward += float(rewards[0])
-        max_x = max(max_x, int(info.get("max_x_pos", 0)))
-        max_level_x = max(max_level_x, int(info.get("level_max_x_pos", 0)))
-        final_info = info
-        if bool(dones[0]):
-            break
-    completed = is_level_complete(final_info, max_x, completion_x_threshold=completion_x_threshold)
-    died = bool(final_info.get("died", False))
-    death_x_pos = final_info.get("death_x_pos")
-    if died and death_x_pos is None:
-        death_x_pos = max_x
-
-    return {
-        "reward": total_reward,
-        "max_x_pos": max_x,
-        "max_level_x_pos": max_level_x,
-        "score": int(final_info.get("score", 0)),
-        "lives": int(final_info.get("lives", 0)),
-        "steps": step_idx + 1,
-        "level_complete": completed,
-        "died": died,
-        "death_x_pos": int(death_x_pos) if death_x_pos is not None else None,
-        "actions": actions,
-    }
-
-
-def replay_actions(env, actions: list[int], seed: int) -> list[np.ndarray]:
-    env.reset(seed=seed)
-    frames = [env.render()]
-    for action in actions:
-        _obs, _reward, terminated, truncated, _info = env.step(action)
-        frames.append(env.render())
-        if terminated or truncated:
-            break
-    return frames
-
-
-def performance_key(summary: dict) -> tuple[int, int, float]:
-    return (
-        int(bool(summary["level_complete"])),
-        int(summary["max_x_pos"]),
-        float(summary["reward"]),
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run episodes and save the best-reward Mario video"
@@ -178,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", default="latest")
     parser.add_argument("--root", default="runs/wandb_artifacts")
     parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
@@ -193,10 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
-    parser.add_argument("--action-set", choices=["simple", "right"], default="right")
+    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="right")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score"],
+        choices=["baseline", "bounded", "additive", "score", "native"],
         default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
@@ -237,6 +143,7 @@ def main() -> None:
     model_path = resolve_model_path(args)
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
     config = EnvConfig(
+        game=args.game,
         state=args.state,
         frame_skip=args.frame_skip,
         max_pool_frames=args.max_pool_frames,
@@ -258,14 +165,15 @@ def main() -> None:
         terminate_on_level_change=args.terminate_on_level_change,
         terminate_on_completion=args.terminate_on_completion,
     )
-    env = make_vec_envs(config=config, n_envs=1, seed=args.seed)
+    env = make_eval_vec_env(config=config, n_envs=1, seed=args.seed)
 
     best_episode = None
     episode_summaries = []
     try:
         for episode_idx in range(args.episodes):
             episode_seed = args.seed + episode_idx
-            result = run_episode(
+            torch.manual_seed(episode_seed)
+            result = run_eval_episode(
                 env=env,
                 model=model,
                 max_steps=args.max_steps,
@@ -278,7 +186,7 @@ def main() -> None:
             summary = {"episode": episode_idx + 1, "seed": episode_seed, **result}
             episode_summaries.append(summary)
             print(json.dumps(summary), flush=True)
-            if best_episode is None or performance_key(summary) > performance_key(
+            if best_episode is None or episode_rank(summary) > episode_rank(
                 best_episode["summary"]
             ):
                 best_episode = {"summary": summary, "actions": actions}
@@ -289,9 +197,9 @@ def main() -> None:
         raise RuntimeError("No episode completed")
 
     output = Path(args.output)
-    video_env = make_mario_env(config=config, seed=best_episode["summary"]["seed"])
+    video_env = make_rendered_replay_env(config=config, seed=best_episode["summary"]["seed"])
     try:
-        frames = replay_actions(
+        frames = replay_actions_for_video(
             video_env, best_episode["actions"], seed=best_episode["summary"]["seed"]
         )
     finally:

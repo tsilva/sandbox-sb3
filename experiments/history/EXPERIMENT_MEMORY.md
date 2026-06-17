@@ -546,3 +546,157 @@ Main lesson:
 - Final rollout log: `ep_len_mean=86.3`, `ep_rew_mean=14.0`, `approx_kl=0.0107`, `clip_fraction=0.0781`, `entropy_loss=-1.28`, `explained_variance=0.886`, `value_loss=2.28`.
 - Artifacts: final model at `runs/local_mps_native_1m/final_model.zip`; checkpoints at approximately every 100k steps from `99,968` through `999,680`. Run directory size after training: about `240M`.
 - Quick deterministic CPU eval of the final model over 5 episodes with `--max-steps 2500 --action-set right`: `completion_rate=0.0`, `death_rate=1.0`, `max_x_mean=max_x_max=325`, `reward_mean=9.83`. This final checkpoint is not useful as a solved policy; checkpoint scanning may still be needed, but the run mainly validates local MPS/native training throughput.
+
+## 2026-06-14 Post5 Runtime Reproduction Check
+
+- Temporarily changed project dependency defaults to `stable-retro-turbo==1.0.0.post5` for both macOS arm64 and Linux x86_64, then attempted to reproduce the best known sample-efficiency config: `learning_rate=2e-4 -> 1e-4` over 2M, entropy `0.01 -> 0.0003` over 2M, seed 23, 16 envs, `n_steps=512`, `batch_size=512`, 5M max, completed-episode stop `80/100`.
+- Run: `b10_post5_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260614_203813`, SkyPilot job `42`, W&B `d3dorh0d`.
+- Systems result: post5 installed cleanly on RTX4090 and reported about `3023` final SB3 fps; full 5M run wall clock was `1667s` (`27m47s`). The comparable post4 winner reported about `1038` final fps and stopped in about `41m03s`.
+- Learning result: failed to reproduce. It maxed at `5,005,312` timesteps with `0/100` completion rate and `0` total completions, while the post4 winner stopped at `2,558,256`.
+- Root cause audit: SkyPilot job `46` compared post4 and post5 under deterministic single-env, raw `StableRetroNativeVecEnv`, and wrapped training-env traces. Single-env behavior matched. Raw post4 native vector returned RAM/info keys (`xscrollHi`, `xscrollLo`, `score`, `lives`, etc.); raw post5 native vector returned empty `info` dicts while still producing nonzero native rewards. The wrapped post5 training env therefore produced all-zero project rewards and default progress fields.
+- Lesson: post5 has a native-vector info regression for this workload, not just a different learning trajectory. Do not use `stable-retro-turbo==1.0.0.post5` for `StableRetroNativeVecEnv` training until fixed; dependency defaults were rolled back to known-good macOS arm64 `1.0.0.post3` and Linux x86_64 `1.0.0.post4`.
+
+## 2026-06-15 Post6 Runtime Reproduction Check
+
+- Tested `stable-retro-turbo==1.0.0.post6` as the intended fix for the post5 native-vector info regression. Because repo supply-chain settings exclude packages newer than 2026-06-14, the SkyPilot task kept the frozen project lock and installed post6 into the job venv with `pip install --no-deps --force-reinstall`.
+- Audit result: post6 fixed the training-relevant regression. Single-env behavior matched post4 (`single_equal=True`), wrapped vector-env behavior matched post4 (`vector_equal=True`), and raw native-vector `info` dicts again contained RAM variables (`xscrollHi`, `xscrollLo`, `score`, `lives`, etc.). `raw_vector_equal=False` remained due a raw random-trace reward difference, but the wrapped training path matched in the deterministic audit.
+- Training run: `b11_post6_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_073609`, SkyPilot cluster/job `sandbox-sb3-post6-audit-4090` job `4`, W&B `q0me90ft`.
+- Systems result: full 5M run wall clock was `1615s` (`26m55s`), final SB3 fps was `3120`, and progress bar throughput was about `3093 it/s`.
+- Learning result: failed to reproduce the post4 winner. It maxed at `5,005,312` timesteps with `0/100` completion rate and `0` total completions. Post6 is not promoted as the sample-efficiency baseline from this run; keep post4 as the current baseline while investigating why post6/post4 learning diverges despite the vector-info fix.
+- Root cause found: post6 changed `copy_observations=False` buffer behavior in a way that breaks SB3 PPO. Alias audit `scripts/audits/audit_retro_observation_aliasing.py` showed post4 returned distinct reset/step observation buffers and did not mutate prior observation arrays; post6 returned the same pointer for reset/step observations and mutated all prior observation references on each `step()`. Post6 with `copy_observations=True` did not mutate prior observations. Because SB3 computes actions from `_last_obs`, then calls `env.step()`, then stores `_last_obs` into the rollout buffer, post6 can store the post-action observation as the pre-action observation. This explains deterministic reward/info audits passing while learning fails.
+
+## 2026-06-15 Post7 Local macOS Alias Audit
+
+- Tested `stable-retro-turbo==1.0.0.post7` locally on the MacBook Pro M1 by installing it into the existing project venv with `uv --no-config pip install --no-deps --force-reinstall`, leaving the repo lock unchanged.
+- Baseline local audit on locked macOS arm64 `post3` passed: `copy_observations=False`, `copy_observations=True`, and the wrapped training env returned populated info keys and did not mutate prior observation references across the three-step audit.
+- Post7 raw and wrapped training envs populated info keys. With `copy_observations=True`, no prior observation mutation occurred. With `copy_observations=False`, post7 did not fully restore post3 semantics: older retained observation references can mutate later and returned observations can share memory.
+- SB3-critical contract appears fixed in post7: the immediately previous observation object, which SB3 PPO uses as `_last_obs` for action selection and then stores after `env.step()`, survived the current `step()` unchanged for eight consecutive wrapped-env steps.
+- Interpretation: post7 likely fixes the specific PPO rollout-buffer corruption found in post6 by using a two-buffer/ring-buffer style lifetime, but it is not equivalent to post3/post4's distinct-buffer-every-step behavior. Treat post7 as candidate-fixed pending Linux/RTX training reproduction before promoting it as a baseline runtime.
+- Artifact: `logs/retro_version_audit/post7_aliasing_macos_seed23.json`, SHA256 `c9bf71e9323b16008168afb00e039a314f85b35977f0ecdb1b356a1c750e7fb8`.
+
+## 2026-06-15 Post7 Local macOS Learning Reproduction
+
+- Ran a local macOS/MPS 5M reproduction of the current best sample-efficiency config under `stable-retro-turbo==1.0.0.post7`: entropy `0.01 -> 0.0003` over 2M, learning rate `2e-4 -> 1e-4` over 2M, seed 23, 16 envs, `n_steps=512`, `batch_size=512`, `n_epochs=10`, score reward, completion terminal bonus, and completed-episode stop `80/100`.
+- Run: `local_post7_repro_b9_lrd1e4_2m_5m_stop80ep100_seed23_20260615`, W&B `ft5i902b`.
+- Systems result: full 5M run wall clock was `7294s` (`2:01:34`), final SB3 fps was `686`, and progress bar average throughput was about `836 it/s`.
+- Learning result: promising but not a full reproduction. The run maxed at `5,005,312` timesteps, final completed-episode rolling rate was `40/100`, and total completions reached `101`. First completions appeared around `2.54M`; the strongest late burst reached about `43/100` around `4.81M`.
+- Interpretation: post7 is no longer showing the catastrophic post5/post6 failure mode. It can learn and clear levels locally, which supports the SB3-critical aliasing fix. However, this Mac/MPS run did not reproduce the post4 RTX winner's `80/100` early-stop behavior, so post7 still needs a Linux/RTX reproduction before promotion as the default baseline runtime.
+- Final model: `runs/local_post7_repro_b9_lrd1e4_2m_5m_stop80ep100_seed23_20260615/final_model.zip`.
+- After the run, the local venv was restored to the locked macOS arm64 pin `stable-retro-turbo==1.0.0.post3`.
+
+## 2026-06-15 Post7 Linux RTX2060 Learning Reproduction
+
+- Ran the same current-best sample-efficiency config under `stable-retro-turbo==1.0.0.post7` on SkyPilot target `ssh/beast2`, GPU `NVIDIA GeForce RTX 2060`.
+- Run: `b12_post7_2060_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_170235`, W&B `an80iif6`.
+- Systems result: early-stopped wall clock was `2055s` (`34m15s`) from training command start to finish. The last logged training throughput before stop was about `1331` SB3 fps on `n_envs=16`.
+- Learning result: reproduced the success criterion. The run stopped at `2,711,552` aggregate timesteps when the last 100 completed terminal episodes reached `80/100`; total completions were `182`. First completions were absent at `1.52M` but ramped quickly after roughly `2.5M`.
+- Interpretation: post7 is now validated on a Linux/RTX training path for this PPO workload. It is not exactly the same hardware as the post4 RTX4090 winner and stopped slightly later than the historical best (`2,558,256`), so keep post4 as the exact comparison point for old ablations. Future Linux/RTX runs can use post7 if the dependency pins are intentionally updated.
+- Final model artifact uploaded to W&B: `b12_post7_2060_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_170235-final`.
+- Remote final model path during the run: `runs/b12_post7_2060_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_170235/final_model.zip`.
+
+## 2026-06-15 Post7 Linux RTX4090 Learning Reproduction
+
+- Ran the same current-best sample-efficiency config under `stable-retro-turbo==1.0.0.post7` on SkyPilot target `k8s/rtx4090`, GPU `NVIDIA GeForce RTX 4090`.
+- Setup evidence: the locked venv initially installed `stable-retro-turbo==1.0.0.post4`, then `pip install --no-deps --force-reinstall stable-retro-turbo==1.0.0.post7` uninstalled post4 and printed `stable-retro-turbo 1.0.0.post7`; CUDA was active with Torch `2.12.0+cu130`.
+- Run: `b13_post7_4090_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_190534`, W&B `4hepwv0x`.
+- Systems result: full 5M run wall clock was `1635s` (`27m15s`), final SB3 fps was `3093`, and final artifact uploaded to W&B.
+- Learning result: failed to reproduce the completed-episode stop criterion. It maxed at `5,005,312` timesteps with final rolling completion rate `31/100`, `197` total completions, and `1706` terminal episodes. The run reached nonzero clears around `2.29M`, rose to roughly the `40-47/100` range around `3.6M-3.8M`, collapsed to low single digits around `4.7M`, and recovered only to `31/100` by the cap.
+- Repeat run: `b14_post7_4090_repeat_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_194155`, W&B `feqsvt6f`, same seed/config on `k8s/rtx4090`, also confirmed `stable-retro-turbo 1.0.0.post7`.
+- Repeat learning result: reproduced the success criterion, stopping just after the last logged update at `4,227,072` timesteps when the training completed-episode window crossed `80/100`; total completions were `189`. Wall clock was `1403s` (`23m23s`), final SB3 fps was `3045`, and the final model artifact uploaded to W&B.
+- Reproducibility interpretation: post7 can succeed on the intended Linux/RTX4090 path, but the same seed/config is not exactly reproducible. One RTX4090 run maxed at `31/100`, while the immediate repeat stayed at `0` completions past `2.9M`, then climbed late and stopped around `4.23M`. Likely contributors are PyTorch/CUDA nondeterminism, SB3/PPO sensitivity to tiny trajectory differences, multi-env/thread scheduling and episode-order differences, and native emulator/vector-env scheduling. Treat single-run sample-efficiency deltas as weak evidence unless repeated.
+- Remote final model path during the run: `runs/b13_post7_4090_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_190534/final_model.zip`.
+- Repeat remote final model path during the run: `runs/b14_post7_4090_repeat_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_194155/final_model.zip`.
+
+## 2026-06-15 Post4 Linux RTX4090 Same-Build Repeatability Control
+
+- Ran two concurrent SkyPilot child trainings on `k8s/rtx4090` with the locked historical Linux build `stable-retro-turbo==1.0.0.post4`, the same seed `23`, and the same hyperparameters as the current best `b9_lr2e4_lrd1e4_2m_5m_stop80ep100_seed23_20260614_190906`.
+- Repeat A: `b15_post4_4090_repeat_a_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_201454`, W&B `pvsxz4u7`.
+- Repeat B: `b15_post4_4090_repeat_b_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_201454`, W&B `l1trgg71`.
+- Systems result: both ran to the 5M cap rather than early stop. Repeat A wall clock was `3352s` (`55m52s`), final fps `1500`; repeat B wall clock was `3356s` (`55m56s`), final fps `1498`. The lower per-run fps versus isolated post7/post5 runs is expected because both PPO trainers shared one node.
+- Learning result: neither reproduced the original post4 winner's `2,558,256`-timestep `80/100` stop. Repeat A maxed at `5,005,312` with final `0/100`, `173` total completions, and `2314` terminal episodes; it briefly reached about `60/100` around `4.63M` before collapsing. Repeat B maxed at `5,005,312` with final `30/100`, `111` total completions, and `1748` terminal episodes.
+- Reproducibility interpretation: the historical post4 build also shows large same-seed outcome variance under a parallel-run setup. The post7 RTX4090 split result is therefore not enough to prove a post7-specific learning regression. Treat the original post4 `2.558M` result as a high-end sample unless repeated isolated post4 runs reproduce it, and use matched repeat distributions for post4-vs-post7 claims.
+- Remote final model paths during the run: `runs/b15_post4_4090_repeat_a_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_201454/final_model.zip` and `runs/b15_post4_4090_repeat_b_best_lrd1e4_2m_5m_stop80ep100_seed23_20260615_201454/final_model.zip`.
+
+## 2026-06-16 Post10 Linux RTX4090 Reproduction Check
+
+- Tested `stable-retro-turbo==1.0.0.post10` on SkyPilot target `k8s/rtx4090` with the same current-best sample-efficiency config: seed `23`, `n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, learning rate `2e-4 -> 1e-4` over 2M, entropy `0.01 -> 0.0003` over 2M, score reward, completion terminal bonus, 5M max, and completed-episode stop `80/100`.
+- Setup evidence: the locked venv initially installed the Linux post4 pin, then `pip install --no-deps --force-reinstall stable-retro-turbo==1.0.0.post10` printed `stable-retro-turbo 1.0.0.post10`; CUDA was active with Torch `2.12.0+cu130` on `NVIDIA GeForce RTX 4090`.
+- Full isolated run: `b16_post10_4090_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260616_063000`.
+- Systems result: the full 5M run completed with status `0` in `1,719s` (`28m39s`). Final observed SB3 fps near the cap was about `2939`; earlier steady-state fps was about `3.0-3.1k`.
+- Learning result: did not reproduce the `80/100` completed-episode stop criterion within 5M. It learned and cleared levels, reaching `253` total completions. The rolling completion window rose to about `66/100` around `3.2M`, collapsed to `0/100` around `3.3M-4.0M`, then recovered to a final observed `47/100` near `4,997,120` timesteps.
+- A first attempted parallel repeat was started via ad hoc `sky exec` inside the already-running pod (`b17_post10_4090_repro_best_repeat2_lrd1e4_2m_5m_stop80ep100_seed23_20260616_064643`). It ran at pathological throughput around `140` fps and was manually terminated at status `143`; ignore it for learning and wall-clock comparisons.
+- Clean repeat: `b16_post10_4090_repro_best_lrd1e4_2m_5m_stop80ep100_seed23_20260616_070550`, launched normally with `sky launch -c` after the first run finished. It restored expected throughput around `3.0k` fps and began learning late: still `0` completions at about `1.77M`, first completions around `2.70M`, and last checked at about `2.78M` with `4` total completions. The user requested all runs stop, so it was manually terminated at status `143` after `1,307s` (`21m47s`) and is incomplete.
+- Interpretation: post10 does not show the catastrophic post5 empty-info regression or post6 SB3-observation-aliasing learning failure, because it produced many real completions. It also did not beat/reproduce the `80/100` criterion in the one completed isolated RTX4090 run. Treat it as runtime-validating but inconclusive for sample efficiency until matched completed repeats are run.
+
+## 2026-06-16 Post10 Seed/Noop/Training Determinism Audit
+
+- Ran a focused determinism audit for `stable-retro-turbo==1.0.0.post10` on SkyPilot target `k8s/rtx4090`, GPU `NVIDIA GeForce RTX 4090`, Torch `2.12.0+cu130`.
+- Environment audit shape: raw `StableRetroNativeVecEnv`, `n_envs=16`, `num_threads=4`, seed `23`/`24`, fixed random action table seed `12345`, 512 vector steps, 3 repeats per case, and native preprocessing enabled (`obs_resize=84x84`, top crop 32, grayscale, area resize, frame skip 4, frame stack 4, maxpool last two, `copy_observations=False`).
+- Same-seed env determinism passed: seed `23` produced identical trace fingerprint `89a0eefc1ac8790f58568871157924f5651de85e4668168ef72e94abdfa7a612` across 3 repeats; seed `24` also repeated identically.
+- Without reset stochasticity, seed `23` and seed `24` produced the same default trace. This is expected for a deterministic fixed-state reset and fixed action table; the seed only had observable effect once reset noops were enabled.
+- The post10 noop kwarg is `noop_reset_max`, not `noopmax`/`noop_max`/`max_noops`. With `noop_reset_max=30`, traces changed from the default and remained deterministic: seed `23` fingerprint `a72112075088355dc93b35605685eaf573236f72a27fc8f585616ea05a09949d`, seed `24` fingerprint `8166a52f460b1428129f2a97f4d6acd21c0cba25a1ccc0224712218fd6ef4420`, each identical across 3 repeats.
+- Minimal PPO training determinism audit passed on CUDA: two independent runs with seed `23`, `n_envs=16`, `n_steps=128`, `batch_size=256`, `n_epochs=2`, learning rate `2e-4`, and `32,768` timesteps produced identical initial policy hashes and identical final policy hash `410924f84d4de5f5b54ee66ec31adac1469e758ba608973ad523595592fc94fd`.
+- Local saved artifact: `logs/post10_determinism_audit/post10_seed_and_training_determinism_noop_reset_max.remote.json`, SHA256 `37e6df14555f64501ce5850957f33f506860263d54324402a7378e8a6432a757`.
+
+## 2026-06-16 Post10 RTX4090 Same-Seed Parallel Repeat Launch
+
+- Launched two concurrent SkyPilot child trainings on `k8s/rtx4090` using `stable-retro-turbo==1.0.0.post10` and the current best Level1 sample-efficiency config: seed `23`, `n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, learning rate `2e-4 -> 1e-4` over 2M, entropy `0.01 -> 0.0003` over 2M, score reward, completion terminal bonus, 5M max, and completed-episode stop `80/100`.
+- SkyPilot cluster: `sandbox-sb3-post10-best-repeat2`; task file: `sky_mario_post10_best_repeat2_parallel_4090.yaml`.
+- Setup evidence: post10 force-installed over the locked Linux post4 wheel; setup printed `stable-retro-turbo 1.0.0.post10`, Torch `2.12.0+cu130`, CUDA `True`, GPU `NVIDIA GeForce RTX 4090`.
+- W&B group: `post10-4090-best-repeat2-parallel-20260616_080204`.
+- Repeat A: `b18_post10_4090_repeat_a_best_lrd1e4_2m_5m_stop80ep100_seed23_20260616_080204`, W&B `pov5c520`, URL `https://wandb.ai/tsilva/SuperMarioBros-NES/runs/pov5c520`.
+- Repeat B: `b18_post10_4090_repeat_b_best_lrd1e4_2m_5m_stop80ep100_seed23_20260616_080204`, W&B `ifb2ib0k`, URL `https://wandb.ai/tsilva/SuperMarioBros-NES/runs/ifb2ib0k`.
+- Early startup check: both Python trainers were running on GPU, each using about `802 MiB`; by `245,760` timesteps both had similar throughput around `2.16k` SB3 fps and identical rollout count progression, though some optimizer metrics already differed slightly under concurrent execution.
+- Divergence investigation: the split appeared immediately after the first PPO update, not later in the run. The first logged rollout at `8,192` timesteps had matching rounded rollout stats, but by `16,384` timesteps optimizer metrics already differed (`approx_kl` about `0.0319` vs `0.0692`) and rollout stats began drifting. Matching `100,000`-step checkpoint policy hashes were already different (`ab3c9260...` vs `fe591566...`).
+- W&B was not the RNG cause in a direct probe: after `set_random_seed(23)`, `wandb.init(..., mode="offline")` and `mode="disabled"` left Python, NumPy, and Torch random streams unchanged.
+- CUDA concurrency root cause probe: two concurrent same-seed synthetic CUDA CNN training processes on fixed tensors produced identical initial model hashes but different final hashes when using default Torch/CUDA settings. Re-running the same probe with `CUBLAS_WORKSPACE_CONFIG=:4096:8`, deterministic cuDNN flags, and `torch.use_deterministic_algorithms(True, warn_only=True)` produced identical final hashes. Conclusion: concurrent same-seed GPU training is not bitwise deterministic by default; the post10 env/noop seed path can be deterministic, but PPO optimizer updates can diverge under concurrent CUDA execution unless deterministic Torch/CUDA settings are forced.
+- Mid-run practical divergence check around `1.81M` timesteps: repeat A had `6` total completions and `0.03` rolling completed-episode rate; repeat B had `1` total completion and `0.01` rate.
+
+## 2026-06-16 RTX4090 Sweep Utilization Benchmark
+
+- Ran an empirical SkyPilot utilization sweep on `k8s/rtx4090` using `stable-retro-turbo==1.0.0.post10`, Torch `2.12.0+cu130`, and `NVIDIA GeForce RTX 4090`.
+- Task: `sky_mario_sweep_util_benchmark_4090.yaml`, cluster `sandbox-sb3-sweep-util-bench`, W&B group `sweep-util-benchmark-4090-20260616_140113`.
+- Shape: concurrent child counts `1,2,3,4,5`; each child trained the current near-best Mario PPO config for `262,144` timesteps with seed offsets `23+child_index`, `n_envs=16`, `env_threads=4`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, score reward, completion terminal bonus, and W&B logging enabled with model artifact uploads disabled.
+- Results by child count:
+  - `1`: aggregate wall fps `2,881`, avg GPU util `16.7%`, max memory `990 MiB`, group wall `91s`.
+  - `2`: aggregate wall fps `4,559`, avg GPU util `36.8%`, max memory `1,797 MiB`, group wall `115s`.
+  - `3`: aggregate wall fps `5,578`, avg GPU util `44.3%`, max memory `2,604 MiB`, group wall `141s`.
+  - `4`: aggregate wall fps `5,858`, avg GPU util `52.1%`, max memory `3,412 MiB`, group wall `179s`.
+  - `5`: aggregate wall fps `6,242`, avg GPU util `57.3%`, max memory `4,219 MiB`, group wall `210s`.
+- Interpretation: one isolated trainer severely underuses the RTX4090. Five concurrent child trainings maximize aggregate screening throughput at about `2.17x` one-child throughput, but per-run wall fps falls to about `1.25k`. For fast screening, run up to `5` children on this 12-vCPU/48GiB RTX4090 node. For confirmation runs where individual latency and lower CPU contention matter, prefer `3-4` children unless the queue is large enough that aggregate throughput dominates.
+
+## 2026-06-16 RTX4090 Env-Threads Parallelism Benchmark
+
+- Ran a follow-up SkyPilot benchmark on `k8s/rtx4090` to test whether reducing per-child native env threads improves aggregate sweep throughput under `4-5` concurrent child trainings.
+- Task: `sky_mario_env_threads_parallel_benchmark_4090.yaml`, cluster `sandbox-sb3-envthreads-bench`, W&B group `env-threads-parallel-benchmark-4090-20260616_143023`.
+- Shape: same current near-best Mario PPO config as the prior utilization benchmark, `stable-retro-turbo==1.0.0.post10`, `n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, `262,144` timesteps per child, W&B logging enabled, model artifact uploads disabled. Matrix: `env_threads={1,2,4}` by concurrent children `{4,5}`.
+- Results:
+  - `env_threads=1`, `4` children: aggregate wall fps `3,785`, avg GPU util `30.7%`, per-child wall fps `946-986`.
+  - `env_threads=1`, `5` children: aggregate wall fps `4,615`, avg GPU util `37.0%`, per-child wall fps `923-933`.
+  - `env_threads=2`, `4` children: aggregate wall fps `5,090`, avg GPU util `41.9%`, per-child wall fps `1,273-1,285`.
+  - `env_threads=2`, `5` children: aggregate wall fps `5,878`, avg GPU util `51.9%`, per-child wall fps `1,176-1,181`.
+  - `env_threads=4`, `4` children: aggregate wall fps `5,825`, avg GPU util `52.2%`, per-child wall fps `1,456-1,489`.
+  - `env_threads=4`, `5` children: aggregate wall fps `6,271`, avg GPU util `58.4%`, per-child wall fps `1,254-1,273`.
+- Interpretation: the initial suspicion that lower `env_threads` might improve multi-run throughput was wrong for this exact workload. Lowering native env threads reduces CPU pressure but underfeeds rollout collection enough that aggregate GPU/training throughput drops. Keep `env_threads=4` with `5` concurrent children for fast screening on this 12-vCPU/48GiB RTX4090 node. `env_threads=2,count=5` is a reasonable lower-contention fallback, but about `6%` slower than `env_threads=4,count=5` in this benchmark.
+
+## 2026-06-16 Interrupted 100/100 RTX4090 Screen Batch
+
+- Started the GOAL.md `100/100` completed-episode screen on SkyPilot target `k8s/rtx4090`, cluster `sandbox-sb3-100of100-screen1`, task `sky_mario_100of100_screen_batch1_4090.yaml`.
+- Runtime evidence: locked Linux baseline runtime `stable-retro-turbo==1.0.0.post4`, Torch `2.12.0+cu130`, CUDA `True`, GPU `NVIDIA GeForce RTX 4090`.
+- W&B group: `100of100-screen-batch1-20260616_151115`.
+- Batch shape: five concurrent child trainings, seed `23`, `n_envs=16`, `env_threads=4`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, score reward, terminal reward `50`, reward scale `10`, completed-episode stop `100/100`, max `5M` timesteps.
+- Candidates:
+  - `control`: `lr 2e-4 -> 1e-4 over 2M`, `ent 0.01 -> 0.0003 over 2M`.
+  - `fixedlr`: fixed `lr=2e-4`, same entropy schedule.
+  - `lr125`: `lr 2e-4 -> 1.25e-4 over 2M`, same entropy schedule.
+  - `ent0001`: control LR schedule with lower entropy floor `0.0001` over 2M.
+  - `clip015`: control schedules with `clip_range=0.15`.
+- Last observed partial metrics before the RTX4090 host was shut down, around `2.47M-2.48M` timesteps:
+  - `ent0001`: strongest signal, `147` total completions, recent completed-episode rate `0.78` after briefly logging `0.80`, not at `100/100`.
+  - `control`: `40` total completions, recent rate `0.22`.
+  - `lr125`: `13` total completions, recent rate `0.02`; it had `11` completions around `1.9M` but then regressed.
+  - `fixedlr`: `4` total completions, recent rate `0.01`; early behavior regressed badly after about `1.9M`.
+  - `clip015`: `0` completions by the last snapshot.
+- Systems note: the live pod was launched before the task file included explicit `cpus: 12+` and `memory: 48+`; the pod requested `4` CPU / `16G` memory but had no CPU limit. Actual trainer CPU usage was about `1.8` cores each, roughly `9` cores total, and per-child SB3 fps stabilized around `890-900` (`~4.45k` aggregate), below the post10 short-benchmark aggregate of `~6.27k`. The local task file was patched after launch to request `cpus: 12+` and `memory: 48+` for retry.
+- Shutdown/cleanup note: user shut down the RTX4090 host before remote cleanup could complete. SSH to `beast-3` returned connection refused. Treat the SkyPilot cluster/job as gone; verify with `sky status --refresh` after the machine is back before relaunching.
+- Decision: incomplete screen, do not promote any baseline. The strongest retry lead is the `ent0001` variant because it reached the old `80/100` zone fastest in this interrupted run, but it still failed the new `100/100` target before shutdown. Next retry should either rerun this exact batch from scratch or prioritize `ent0001` plus nearby entropy-floor variants under the corrected resource request.

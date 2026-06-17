@@ -13,7 +13,6 @@ from typing import Any
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
-import numpy as np
 import torch
 from stable_baselines3 import PPO
 
@@ -22,14 +21,14 @@ from mario_ppo.env import (
     DEFAULT_HUD_CROP_TOP,
     EnvConfig,
     assert_rom_imported,
-    make_mario_env,
-    make_vec_envs,
+    make_eval_vec_env,
+    make_rendered_replay_env,
 )
 from mario_ppo.eval_metrics import (
-    death_location_histogram,
     episode_rank,
     replay_actions_for_video,
     run_eval_episode,
+    summarize_episode_results,
     write_video,
 )
 from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
@@ -149,6 +148,7 @@ def evaluate_checkpoint(
 ) -> tuple[dict[str, Any], Path | None]:
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
     config = EnvConfig(
+        game=args.game,
         state=args.state,
         frame_skip=args.frame_skip,
         max_pool_frames=args.max_pool_frames,
@@ -171,7 +171,7 @@ def evaluate_checkpoint(
         terminate_on_completion=args.terminate_on_completion,
         action_set=args.action_set,
     )
-    eval_env = make_vec_envs(config=config, n_envs=1, seed=args.seed + checkpoint_step)
+    eval_env = make_eval_vec_env(config=config, n_envs=1, seed=args.seed + checkpoint_step)
     episode_results: list[dict[str, Any]] = []
     best_episode_result: dict[str, Any] | None = None
     best_episode_actions: list[int] = []
@@ -201,42 +201,17 @@ def evaluate_checkpoint(
     finally:
         eval_env.close()
 
-    rewards = np.array([episode["reward"] for episode in episode_results], dtype=np.float64)
-    x_positions = np.array([episode["max_x_pos"] for episode in episode_results], dtype=np.float64)
-    level_x_positions = np.array(
-        [episode["max_level_x_pos"] for episode in episode_results],
-        dtype=np.float64,
+    metrics = summarize_episode_results(
+        episode_results,
+        deterministic=args.deterministic,
+        extra={
+            "checkpoint_step": checkpoint_step,
+            "checkpoint_artifact": artifact_name,
+            "model": str(model_path),
+            "hud_crop_top": args.hud_crop_top,
+        },
     )
-    death_x_positions = [
-        int(episode["death_x_pos"])
-        for episode in episode_results
-        if episode.get("death_x_pos") is not None
-    ]
-    completion_count = sum(1 for episode in episode_results if episode["level_complete"])
-    death_count = sum(1 for episode in episode_results if episode["died"])
-
-    metrics: dict[str, Any] = {
-        "checkpoint_step": checkpoint_step,
-        "checkpoint_artifact": artifact_name,
-        "model": str(model_path),
-        "episodes": args.episodes,
-        "deterministic": args.deterministic,
-        "hud_crop_top": args.hud_crop_top,
-        "reward_mean": float(rewards.mean()),
-        "reward_std": float(rewards.std()),
-        "reward_max": float(rewards.max()),
-        "max_x_mean": float(x_positions.mean()),
-        "max_x_max": int(x_positions.max()),
-        "max_level_x_mean": float(level_x_positions.mean()),
-        "max_level_x_max": int(level_x_positions.max()),
-        "completion_count": completion_count,
-        "completion_rate": completion_count / args.episodes,
-        "death_count": death_count,
-        "death_rate": death_count / args.episodes,
-        "death_x_histogram": death_location_histogram(death_x_positions),
-        "best_episode": best_episode_result,
-        "episode_results": episode_results,
-    }
+    metrics["best_episode"] = best_episode_result
 
     video_path = None
     if args.record_best_video and best_episode_actions and best_episode_seed is not None:
@@ -246,7 +221,7 @@ def evaluate_checkpoint(
             / "videos"
             / f"best_episode_{checkpoint_step}_steps.mp4"
         )
-        video_env = make_mario_env(config=config, seed=best_episode_seed)
+        video_env = make_rendered_replay_env(config=config, seed=best_episode_seed)
         try:
             frames = replay_actions_for_video(
                 video_env,
@@ -383,6 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Re-evaluate checkpoints already logged"
     )
     parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
@@ -396,10 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=10007)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
-    parser.add_argument("--action-set", choices=["simple", "right"], default="right")
+    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="right")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score"],
+        choices=["baseline", "bounded", "additive", "score", "native"],
         default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)

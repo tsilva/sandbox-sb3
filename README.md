@@ -1,8 +1,10 @@
-# Mario PPO
+# Stable Retro PPO
 
-PPO training scaffold for `SuperMarioBros-Nes-v0` using `stable-retro-turbo` and Stable-Baselines3.
+PPO training scaffold for Stable Retro games using `stable-retro-turbo` and Stable-Baselines3.
 
-The goal is to train a CNN PPO policy that moves right through `Level1-1` and improves over random and simple scripted baselines.
+The default target is `SuperMarioBros-Nes-v0` / `Level1-1`, with Mario-specific
+actions, progress metrics, completion detection, and reward shaping. Other
+Stable Retro games can run through the generic native-action target.
 
 ## Setup
 
@@ -22,12 +24,7 @@ CPU even when MPS is available.
 
 ```bash
 uv run python -m mario_ppo.evaluate --policy right --episodes 2 --max-steps 600
-uv run python -m mario_ppo.train \
-  --timesteps 512 \
-  --n-envs 1 \
-  --batch-size 128 \
-  --max-episode-steps 600 \
-  --run-name smoke
+uv run python -m mario_ppo.train --preset smoke
 uv run python -m mario_ppo.evaluate --model runs/smoke/final_model.zip --episodes 2 --max-steps 600
 ```
 
@@ -46,6 +43,31 @@ uv run python -m mario_ppo.train \
   --timesteps 1000000 \
   --run-name ppo_level1_1_1m
 ```
+
+Named presets keep common run shapes short while still allowing explicit CLI
+flags to override any value:
+
+```bash
+uv run python -m mario_ppo.train --preset smoke
+uv run python -m mario_ppo.train --preset modal-t4 --run-name modal_candidate --run-description "Candidate Modal T4 baseline"
+```
+
+Train an arbitrary imported Stable Retro game with the generic native-action
+target:
+
+```bash
+uv run python -m mario_ppo.train \
+  --game SonicTheHedgehog-Genesis \
+  --state GreenHillZone.Act1 \
+  --action-set native \
+  --reward-mode native \
+  --run-name sonic_native_smoke \
+  --run-description "Generic native-reward PPO smoke run for Sonic"
+```
+
+Custom target classes use the Stable Retro game id as the class stem. For
+example, `SuperMarioBros-Nes-v0` maps to `SuperMarioBrosNesV0Target`. Unknown
+game ids get a dynamic generic class with the same naming rule.
 
 Longer run:
 
@@ -67,7 +89,7 @@ uv run python -m mario_ppo.train \
 ```
 
 Current training defaults mimic the upstream baseline hyperparameters from
-`BASELINE.md` while keeping SB3's `CnnPolicy` model:
+`experiments/history/BASELINE.md` while keeping SB3's `CnnPolicy` model:
 
 ```text
 device=auto -> mps
@@ -251,6 +273,44 @@ UV_CACHE_DIR=.uv-cache uv run modal run src/mario_ppo/modal_app.py::train \
 
 When W&B is enabled, training uploads checkpoint and final-model artifacts. The Modal result includes `wandb_url` when W&B provides a run URL. A separate local eval process promotes the best-model artifact from evaluated checkpoints.
 
+To keep checkpoint bytes out of W&B storage, point model artifacts at an S3-compatible
+bucket such as Cloudflare R2. The training process uploads each model zip to the
+bucket and logs a W&B reference artifact:
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+export AWS_REGION=auto
+export CHECKPOINT_BUCKET_URI=s3://sandbox-sb3-wandb-artifacts/mario-ppo
+
+UV_CACHE_DIR=.uv-cache uv run python scripts/setup_r2_bucket.py sandbox-sb3-wandb-artifacts \
+  --prefix mario-ppo \
+  --create
+
+UV_CACHE_DIR=.uv-cache uv run python -m mario_ppo.train \
+  --run-name r2_wandb_artifact_smoke \
+  --run-description "Smoke test W&B reference artifacts backed by Cloudflare R2" \
+  --timesteps 512 \
+  --n-envs 1 \
+  --checkpoint-freq 256 \
+  --wandb \
+  --wandb-project SuperMarioBros-NES \
+  --wandb-artifact-storage-uri "${CHECKPOINT_BUCKET_URI}"
+```
+
+For SkyPilot, pass bucket config as env vars and credentials as secrets:
+
+```bash
+sky launch -c mario-ppo-gpu sky_mario.yaml \
+  --env AWS_REGION \
+  --env AWS_S3_ENDPOINT_URL \
+  --env CHECKPOINT_BUCKET_URI \
+  --secret AWS_ACCESS_KEY_ID \
+  --secret AWS_SECRET_ACCESS_KEY \
+  --secret WANDB_API_KEY
+```
+
 Evaluate pending checkpoint artifacts locally and log metrics back to the same W&B run:
 
 ```bash
@@ -398,10 +458,14 @@ UV_CACHE_DIR=.uv-cache uv run modal run src/mario_ppo/modal_app.py::train \
 
 ## Notes
 
+- Long-form baseline and ablation history lives under `experiments/history/`.
+  Keep top-level docs focused on setup, current operating rules, and active goals.
+- Reusable operator scripts stay directly under `scripts/`; one-off audits live
+  under `scripts/audits/`, and throughput diagnostics live under `scripts/benchmarks/`.
 - The bundled stable-retro scenario rewards only `xscrollLo`, the low byte of scroll position. That byte wraps every 256 pixels, so training ignores that reward by default and uses wrapper-computed global best x-progress instead.
 - Level changes are detected with stable-retro's `levelHi/levelLo` info fields. The wrapper logs both global progress (`max_x_pos`) and within-level progress (`level_max_x_pos`).
 - By default episodes terminate on first life loss so the policy cannot farm repeated early progress after dying.
 - Training rollouts use `StableRetroNativeVecEnv`. The default stable-retro-turbo observation pipeline uses `obs_crop=(32, 0, 0, 0)`, `obs_resize_algorithm="area"`, `obs_resize=(84, 84)`, `obs_grayscale=True`, `frame_skip=4`, `frame_stack=4`, and `maxpool_last_two=True`.
-- Training and model evaluation rollouts use `StableRetroNativeVecEnv`. Python vector wrappers add discrete Mario actions, true progress reward, progress metrics, and SB3's HWC-to-CHW transpose. Image preprocessing, frame skip, frame stack, and max-pool stay in native stable-retro-turbo. Evaluation videos replay selected action traces through the render-capable single-env path for visualization only.
+- Training and model evaluation rollouts use `StableRetroNativeVecEnv`. Python vector wrappers add target-specific discrete actions when a target defines them, target progress/reward metrics, and SB3's HWC-to-CHW transpose. Image preprocessing, frame skip, frame stack, and max-pool stay in native stable-retro-turbo. Evaluation videos replay selected action traces through the render-capable single-env path for visualization only.
 - `StableRetroNativeVecEnv` autoresets native terminal slots and provides `info["terminal_observation"]` before reset. Python-defined terminal events such as first-life-loss, level-completion termination, and max episode steps save `terminal_observation` before a full-vector reset. Slots reset only because another slot hit a Python terminal are marked `TimeLimit.truncated=True` so SB3 bootstraps from their terminal observation instead of treating the transition as a true terminal.
 - Generated checkpoints and logs stay under `runs/`.

@@ -22,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", default="latest")
     parser.add_argument("--root", default="runs/wandb_artifacts")
     parser.add_argument("--episodes", type=int, default=3)
+    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
+    parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=1200)
@@ -32,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score"],
+        choices=["baseline", "bounded", "additive", "score", "native"],
         default="baseline",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
@@ -49,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-terminate-on-life-loss", action="store_true")
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--action-set", choices=["simple", "right"], default="simple")
+    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
     parser.add_argument("--download-only", action="store_true")
     return parser
 
@@ -88,6 +90,10 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
         str(model_path),
         "--episodes",
         str(args.episodes),
+        "--game",
+        args.game,
+        "--state",
+        args.state,
         "--max-steps",
         str(args.max_steps),
         "--frame-skip",

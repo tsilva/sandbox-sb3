@@ -9,6 +9,7 @@ from pathlib import Path
 
 import modal
 
+from mario_ppo.cli import TRAIN_COMMAND_FIELDS, build_train_command
 from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT
 
 APP_NAME = "mario-ppo"
@@ -114,6 +115,8 @@ def train_remote(
     torch_num_threads: int = 0,
     seed: int = 123,
     run_name: str = "modal_ppo_level1_1",
+    run_description: str = "",
+    game: str = "SuperMarioBros-Nes-v0",
     state: str = "Level1-1",
     states: str = "",
     batch_size: int = 256,
@@ -162,6 +165,7 @@ def train_remote(
     wandb: bool = True,
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     wandb_mode: str = "online",
+    wandb_artifact_storage_uri: str = "",
 ) -> dict[str, str | int | bool | None]:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     if not ROM_DIR.exists() or not any(ROM_DIR.iterdir()):
@@ -179,115 +183,13 @@ def train_remote(
             resolved_resume = str(latest_checkpoint)
             print(f"Auto-resuming from latest checkpoint {resolved_resume}", flush=True)
 
-    cmd = [
-        "python",
-        "-m",
-        "mario_ppo.train",
-        "--timesteps",
-        str(timesteps),
-        "--n-envs",
-        str(n_envs),
-        "--env-threads",
-        str(env_threads),
-        "--torch-num-threads",
-        str(torch_num_threads),
-        "--seed",
-        str(seed),
-        "--run-name",
-        run_name,
-        "--runs-dir",
-        str(RUNS_DIR),
-        "--state",
-        state,
-        "--states",
-        states,
-        "--batch-size",
-        str(batch_size),
-        "--n-steps",
-        str(n_steps),
-        "--n-epochs",
-        str(n_epochs),
-        "--learning-rate",
-        str(learning_rate),
-        "--gamma",
-        str(gamma),
-        "--gae-lambda",
-        str(gae_lambda),
-        "--device",
-        device,
-        "--eval-freq",
-        str(eval_freq),
-        "--eval-episodes",
-        str(eval_episodes),
-        "--completion-x-threshold",
-        str(completion_x_threshold),
-        "--eval-video-fps",
-        str(eval_video_fps),
-        "--eval-video-scale",
-        str(eval_video_scale),
-        "--frame-skip",
-        str(frame_skip),
-        "--max-episode-steps",
-        str(max_episode_steps),
-        "--hud-crop-top",
-        str(hud_crop_top),
-        "--checkpoint-freq",
-        str(checkpoint_freq),
-        "--ent-coef",
-        str(ent_coef),
-        "--vf-coef",
-        str(vf_coef),
-        "--clip-range",
-        str(clip_range),
-        "--adam-eps",
-        str(adam_eps),
-        "--reward-mode",
-        reward_mode,
-        "--progress-reward-cap",
-        str(progress_reward_cap),
-        "--progress-reward-scale",
-        str(progress_reward_scale),
-        "--terminal-reward",
-        str(terminal_reward),
-        "--reward-scale",
-        str(reward_scale),
-        "--time-penalty",
-        str(time_penalty),
-        "--death-penalty",
-        str(death_penalty),
-        "--completion-reward",
-        str(completion_reward),
-        "--no-progress-timeout-steps",
-        str(no_progress_timeout_steps),
-        "--no-progress-min-delta",
-        str(no_progress_min_delta),
-        "--action-set",
-        action_set,
-    ]
-    if score_progress_clipped:
-        cmd.append("--score-progress-clipped")
-    if max_pool_frames:
-        cmd.append("--max-pool-frames")
-    else:
-        cmd.append("--no-max-pool-frames")
-    if target_kl > 0:
-        cmd.extend(["--target-kl", str(target_kl)])
-    if normalize_advantage:
-        cmd.append("--normalize-advantage")
-    if eval_stochastic:
-        cmd.append("--eval-stochastic")
-    if no_eval_videos:
-        cmd.append("--no-eval-videos")
-    if no_terminate_on_life_loss:
-        cmd.append("--no-terminate-on-life-loss")
-    if terminate_on_level_change:
-        cmd.append("--terminate-on-level-change")
-    if terminate_on_completion:
-        cmd.append("--terminate-on-completion")
-    if resolved_resume:
-        cmd.extend(["--resume", resolved_resume])
-    if wandb:
-        cmd.extend(["--wandb", "--wandb-project", wandb_project, "--wandb-mode", wandb_mode])
+    local_values = locals().copy()
+    train_options = {
+        key: local_values[key] for key in TRAIN_COMMAND_FIELDS if key in local_values
+    }
+    train_options["runs_dir"] = str(RUNS_DIR)
+    train_options["resume"] = resolved_resume
+    cmd = build_train_command(train_options)
 
     env = os.environ.copy()
     if not wandb:
@@ -299,8 +201,12 @@ def train_remote(
     wandb_url_path = run_dir / "wandb_url.txt"
     wandb_run_id_path = run_dir / "wandb_run_id.txt"
     wandb_run_path_path = run_dir / "wandb_run_path.txt"
+    run_description_path = run_dir / "run_description.txt"
     return {
         "run_name": run_name,
+        "run_description": (
+            run_description_path.read_text().strip() if run_description_path.is_file() else None
+        ),
         "run_dir": str(run_dir),
         "final_model": str(run_dir / "final_model.zip"),
         "wandb_url": wandb_url_path.read_text().strip() if wandb_url_path.is_file() else None,
@@ -508,7 +414,7 @@ def benchmark_env_diagnostics_remote(
     _run(["python", "-m", "stable_retro.import", str(ROM_DIR)])
     cmd = [
         "python",
-        "scripts/benchmark_retro_env_diagnostics.py",
+        "scripts/benchmarks/benchmark_retro_env_diagnostics.py",
         "--single-steps",
         str(single_steps),
         "--vec-steps",
@@ -562,6 +468,9 @@ def train(
     torch_num_threads: int = 0,
     seed: int = 123,
     run_name: str = "modal_smoke",
+    run_description: str = "",
+    game: str = "SuperMarioBros-Nes-v0",
+    state: str = "Level1-1",
     states: str = "",
     cpu: float = 8.0,
     memory: int = 16384,
@@ -611,6 +520,7 @@ def train(
     wandb: bool = False,
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     wandb_mode: str = "offline",
+    wandb_artifact_storage_uri: str = "",
 ) -> None:
     result = train_remote.with_options(cpu=cpu, memory=memory, gpu=gpu).remote(
         timesteps=timesteps,
@@ -619,6 +529,9 @@ def train(
         torch_num_threads=torch_num_threads,
         seed=seed,
         run_name=run_name,
+        run_description=run_description,
+        game=game,
+        state=state,
         states=states,
         batch_size=batch_size or (128 if n_envs == 1 else 256),
         n_steps=n_steps,
@@ -666,6 +579,7 @@ def train(
         wandb=wandb,
         wandb_project=wandb_project,
         wandb_mode=wandb_mode,
+        wandb_artifact_storage_uri=wandb_artifact_storage_uri,
     )
     print(result)
 

@@ -8,7 +8,6 @@ from dataclasses import asdict
 import gymnasium as gym
 import numpy as np
 import stable_retro as retro
-from stable_retro import StableRetroSubprocVecEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from mario_ppo.env import (
@@ -48,24 +47,9 @@ def make_retro_preprocessed_env(seed: int, resize_algorithm: str) -> gym.Env:
         obs_grayscale=True,
         obs_resize_algorithm=resize_algorithm,
     )
-    env = DiscreteMarioActions(env, action_set=config.action_set)
+    env = DiscreteMarioActions(env, config=config)
     env = FrameSkip(env, config.frame_skip)
-    env = MarioProgressInfo(
-        env,
-        use_retro_reward=config.use_retro_reward,
-        reward_mode=config.reward_mode,
-        progress_reward_cap=config.progress_reward_cap,
-        progress_reward_scale=config.progress_reward_scale,
-        terminal_reward=config.terminal_reward,
-        reward_scale=config.reward_scale,
-        time_penalty=config.time_penalty,
-        death_penalty=config.death_penalty,
-        completion_reward=config.completion_reward,
-        completion_x_threshold=config.completion_x_threshold,
-        terminate_on_life_loss=config.terminate_on_life_loss,
-        terminate_on_level_change=config.terminate_on_level_change,
-        terminate_on_completion=config.terminate_on_completion,
-    )
+    env = MarioProgressInfo(env, config=config)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=config.max_episode_steps)
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
@@ -155,7 +139,14 @@ def bench_vector(
     resize_algorithm: str,
 ) -> dict[str, object]:
     make_vec_env_fn.resize_algorithm = resize_algorithm
-    vec_env_cls = StableRetroSubprocVecEnv if mode == "fast" else SubprocVecEnv
+    if mode == "fast":
+        try:
+            from stable_retro import StableRetroSubprocVecEnv
+        except ImportError as exc:
+            raise SystemExit(f"StableRetroSubprocVecEnv unavailable: {exc}") from exc
+        vec_env_cls = StableRetroSubprocVecEnv
+    else:
+        vec_env_cls = SubprocVecEnv
     vec_env = vec_env_cls(
         [make_vec_env_fn(mode, rank, seed) for rank in range(envs)],
         start_method="fork",
