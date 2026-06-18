@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mario_ppo.modal_benchmarks import (
+from stable_retro_ppo.modal_benchmarks import (
     benchmark_env,
     benchmark_env_diagnostics,
     benchmark_env_diagnostics_remote,
@@ -9,8 +9,8 @@ from mario_ppo.modal_benchmarks import (
     benchmark_env_sweep_remote,
     upload_roms,
 )
-from mario_ppo.modal_core import app
-from mario_ppo.modal_train import train, train_remote
+from stable_retro_ppo.modal_core import app
+from stable_retro_ppo.modal_train import train, train_remote
 
 __all__ = [
     "app",

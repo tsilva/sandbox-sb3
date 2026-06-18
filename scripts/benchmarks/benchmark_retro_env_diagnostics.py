@@ -113,6 +113,9 @@ def _bench_vector(
 
 
 def run_diagnostics(
+    game: str,
+    state: str,
+    hud_crop_top: int,
     single_steps: int,
     vec_steps: int,
     warmup: int,
@@ -120,34 +123,37 @@ def run_diagnostics(
     start_method: str,
 ) -> dict[str, Any]:
     os.environ.setdefault("STABLE_RETRO_DISABLE_AUDIO", "1")
+    kwargs = {"state": state} if state else {}
 
     def raw_rgb_env() -> Any:
-        return retro.make("SuperMarioBros-Nes-v0", render_mode="rgb_array")
+        return retro.make(game, render_mode="rgb_array", **kwargs)
 
     def skip_only_env() -> Any:
-        return retro.make("SuperMarioBros-Nes-v0", render_mode="rgb_array", frame_skip=4)
+        return retro.make(game, render_mode="rgb_array", frame_skip=4, **kwargs)
 
     def resize_gray_env() -> Any:
         return retro.make(
-            "SuperMarioBros-Nes-v0",
+            game,
             render_mode="rgb_array",
             obs_resize=(84, 84),
-            obs_crop=(32, 0, 0, 0),
+            obs_crop=(hud_crop_top, 0, 0, 0) if hud_crop_top else None,
             obs_resize_algorithm="area",
             obs_grayscale=True,
+            **kwargs,
         )
 
     def atari_env() -> Any:
         return retro.make(
-            "SuperMarioBros-Nes-v0",
+            game,
             render_mode="rgb_array",
             obs_resize=(84, 84),
-            obs_crop=(32, 0, 0, 0),
+            obs_crop=(hud_crop_top, 0, 0, 0) if hud_crop_top else None,
             obs_resize_algorithm="area",
             obs_grayscale=True,
             frame_skip=4,
             frame_stack=4,
             maxpool_last_two=True,
+            **kwargs,
         )
 
     results = [
@@ -187,6 +193,9 @@ def run_diagnostics(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--game", required=True)
+    parser.add_argument("--state", default="")
+    parser.add_argument("--hud-crop-top", type=int, default=0)
     parser.add_argument("--single-steps", type=int, default=3_000)
     parser.add_argument("--vec-steps", type=int, default=2_000)
     parser.add_argument("--warmup", type=int, default=100)
@@ -196,6 +205,9 @@ def main() -> None:
 
     vector_envs = [int(value.strip()) for value in args.vector_envs.split(",") if value.strip()]
     result = run_diagnostics(
+        game=args.game,
+        state=args.state,
+        hud_crop_top=args.hud_crop_top,
         single_steps=args.single_steps,
         vec_steps=args.vec_steps,
         warmup=args.warmup,

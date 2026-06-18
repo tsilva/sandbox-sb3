@@ -280,6 +280,7 @@ class RetroTarget:
     default_completion_x_threshold: ClassVar[int] = 0
     default_action_set: ClassVar[str] = "native"
     default_reward_mode: ClassVar[str] = "native"
+    default_terminate_on_life_loss: ClassVar[bool] = False
     action_library: ClassVar[dict[str, np.ndarray]] = {}
     action_sets: ClassVar[dict[str, tuple[str, ...]]] = {}
     tracker_cls: ClassVar[type[RetroProgressTracker]] = RetroProgressTracker
@@ -318,6 +319,7 @@ class SuperMarioBrosNesV0Target(RetroTarget):
     default_completion_x_threshold = 3160
     default_action_set = "simple"
     default_reward_mode = "baseline"
+    default_terminate_on_life_loss = True
     tracker_cls = SuperMarioBrosNesV0ProgressTracker
 
     # stable-retro button order for NES:

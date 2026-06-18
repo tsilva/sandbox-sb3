@@ -16,25 +16,26 @@ import pygame
 import torch
 from stable_baselines3 import PPO
 
-from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import (
-    DEFAULT_HUD_CROP_TOP,
+from stable_retro_ppo.device import resolve_sb3_device
+from stable_retro_ppo.env import (
+    EnvConfig,
     assert_rom_imported,
-    make_fast_mario_env,
+    make_fast_retro_env,
     make_rendered_replay_env,
+    resolve_env_config,
 )
-from mario_ppo.env_config import env_config_from_args
-from mario_ppo.eval_metrics import single_env_action
+from stable_retro_ppo.env_config import env_config_from_args
+from stable_retro_ppo.eval_metrics import single_env_action
 
 
 def stacked_obs(frames: deque[np.ndarray]) -> np.ndarray:
-    # Model was trained with VecFrameStack + VecTransposeImage: (n_env, 4, 84, 84).
+    # Rendered replay stacks grayscale frames into the channel-first model layout.
     return np.stack([frame[..., 0] for frame in frames], axis=0)[None, ...]
 
 
 def fast_env_obs(obs: np.ndarray) -> np.ndarray:
-    # Fast/native envs return stacked grayscale frames as (84, 84, 4).
-    # SB3 models trained behind VecTransposeImage receive (n_env, 4, 84, 84).
+    # Older native envs may expose HWC stacks; post12 exposes CHW stacks.
+    # The policy always receives SB3's channel-first batch layout.
     arr = np.asarray(obs)
     if arr.ndim == 3 and arr.shape[-1] == 4:
         return np.transpose(arr, (2, 0, 1))[None, ...]
@@ -99,7 +100,7 @@ class PygameViewer:
         if position is not None:
             os.environ["SDL_VIDEO_WINDOW_POS"] = f"{position[0]},{position[1]}"
         pygame.init()
-        pygame.display.set_caption("Mario PPO")
+        pygame.display.set_caption("Stable Retro PPO")
         self.screen = pygame.display.set_mode(self.size)
         self.font = pygame.font.Font(None, max(16, 5 * scale))
 
@@ -133,7 +134,7 @@ class PygameViewer:
 
 class OptionsPanel:
     def __init__(self, fps: float, show_obs_stack: bool, position: tuple[int, int] | None = None):
-        self.window_name = "Mario PPO controls"
+        self.window_name = "Stable Retro PPO controls"
         self.cv2 = None
         self.show_obs_stack = show_obs_stack
         self.obs_button_rect = (10, 8, 170, 28)
@@ -218,7 +219,7 @@ class OptionsPanel:
 class ObsStackViewer:
     def __init__(self, scale: int, position: tuple[int, int] | None = None):
         self.scale = scale
-        self.window_name = "Mario PPO obs framestack"
+        self.window_name = "Stable Retro PPO obs framestack"
         self.cv2 = None
 
         try:
@@ -247,19 +248,20 @@ class ObsStackViewer:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    defaults = EnvConfig()
     parser = argparse.ArgumentParser(
-        description="Show a PPO checkpoint playing Mario in a GUI window"
+        description="Show a PPO checkpoint playing a Stable Retro game in a GUI window"
     )
-    parser.add_argument("--model", default="runs/smoke_doc/final_model.zip")
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument("--model", default="runs/smoke/final_model.zip")
+    parser.add_argument("--game", default=defaults.game)
+    parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=1200)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
-        default=DEFAULT_HUD_CROP_TOP,
+        default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
     parser.add_argument(
@@ -295,8 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stochastic", action="store_true", help="Sample from the policy")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=defaults.reward_mode,
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
@@ -308,22 +310,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-progress-clipped", action="store_true")
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--completion-x-threshold", type=int, default=0)
-    parser.add_argument("--no-terminate-on-life-loss", action="store_true")
+    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.terminate_on_life_loss,
+    )
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
+    parser.add_argument("--action-set", default=defaults.action_set)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    assert_rom_imported()
+    assert_rom_imported(args.game)
     model = PPO.load(args.model, device=resolve_sb3_device(args.device))
-    config = env_config_from_args(args, max_episode_steps_attr="max_steps")
+    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
     display_env = make_rendered_replay_env(config=config, seed=args.seed)
     policy_env = (
-        make_fast_mario_env(config=config, seed=args.seed)
+        make_fast_retro_env(config=config, seed=args.seed)
         if args.policy_env == "fast"
         else display_env
     )

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import modal
 
-APP_NAME = "mario-ppo"
-VOLUME_NAME = "mario-ppo-data"
-PROJECT_ROOT = Path("/root/mario-ppo")
+APP_NAME = "stable-retro-ppo"
+VOLUME_NAME = "stable-retro-ppo-data"
+PROJECT_ROOT = Path("/root/stable-retro-ppo")
 VOLUME_ROOT = Path("/vol")
 ROM_DIR = VOLUME_ROOT / "roms"
 RUNS_DIR = VOLUME_ROOT / "runs"

@@ -81,6 +81,33 @@ reliability regression, and all runs either stop by `100/100` or reach the cap.
 A baseline is the best confirmed config, not the best single run. Single lucky
 runs generate hypotheses; they do not replace the baseline.
 
+## Historical Context
+
+The old `80/100` completed-episode target is retired. It was useful for finding
+promising shapes, but it is not the current success criterion.
+
+Most important retained facts from the retired experiment history:
+
+- The best old single run was
+  `b9_lr2e4_lrd1e4_2m_5m_stop80ep100_seed23_20260614_190906`, which reached the
+  old `80/100` threshold at `2,558,256` timesteps with
+  `learning_rate=2e-4 -> 1e-4 over 2M` and
+  `ent_coef=0.01 -> 0.0003 over 2M`.
+- That result was not a confirmed baseline. Same-seed/same-config repeats on
+  later runs showed large PPO/CUDA/systems variance and did not reliably
+  reproduce the old `80/100` stop.
+- The upstream PPO reproduction proved that the simple-action, `gamma=0.9`,
+  `gae_lambda=1.0`, fixed-entropy recipe can learn Level1-1, but checkpoint
+  quality is non-monotonic. Do not evaluate a training run by final checkpoint
+  alone.
+- Use out-of-process stochastic checkpoint evaluation for promotion evidence.
+  Rank checkpoints by completion rate first, then maximum x-position, then mean
+  reward.
+- Historical `BASELINE*` names are retired. In this repo, "baseline" now means a
+  config confirmed under the current `100/100` protocol.
+- Stable-retro runtime cautions and the current default runtime pin live in
+  `AGENTS.md`; hardware and SkyPilot facts live in `INSTANCES.md`.
+
 ## RTX4090 Execution
 
 Run SkyPilot jobs on:
@@ -135,7 +162,7 @@ If used, mark deterministic CUDA as a separate runtime condition.
 Start from this near-best shape unless explicitly ablating one axis:
 
 ```text
-stable-retro-turbo: latest training-validated build for target hardware
+stable-retro-turbo: 1.0.0.post12
 state: Level1-1
 n_envs: 16
 env_threads: 4

@@ -12,15 +12,16 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from stable_baselines3 import PPO
 
-from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import (
-    DEFAULT_HUD_CROP_TOP,
+from stable_retro_ppo.device import resolve_sb3_device
+from stable_retro_ppo.env import (
+    EnvConfig,
     action_names_for_set,
     assert_rom_imported,
     make_eval_vec_env,
+    resolve_env_config,
 )
-from mario_ppo.env_config import env_config_from_args
-from mario_ppo.eval_metrics import is_level_complete, run_eval_episode, summarize_episode_results
+from stable_retro_ppo.env_config import env_config_from_args
+from stable_retro_ppo.eval_metrics import is_level_complete, run_eval_episode, summarize_episode_results
 
 
 def scripted_action(policy: str, step_idx: int, action_names: tuple[str, ...]) -> int:
@@ -80,19 +81,20 @@ def run_scripted_episode(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate Mario PPO or scripted baselines")
+    defaults = EnvConfig()
+    parser = argparse.ArgumentParser(description="Evaluate PPO or scripted Stable Retro baselines")
     parser.add_argument("--model", help="Path to PPO .zip model")
     parser.add_argument("--policy", choices=["random", "right", "noop"], default="random")
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument("--game", default=defaults.game, help="Stable Retro game id")
+    parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=4500)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
-        default=DEFAULT_HUD_CROP_TOP,
+        default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
     parser.add_argument("--seed", type=int, default=7)
@@ -106,8 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-retro-reward", action="store_true")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=defaults.reward_mode,
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
@@ -119,15 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-progress-clipped", action="store_true")
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--no-terminate-on-life-loss", action="store_true")
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.terminate_on_life_loss,
+    )
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
+    parser.add_argument("--action-set", default=defaults.action_set)
     parser.add_argument(
         "--completion-x-threshold",
         type=int,
-        default=3160,
-        help="Treat an episode as level-complete if max_x_pos reaches this value; set <=0 to disable.",
+        default=defaults.completion_x_threshold,
+        help="Target progress threshold for completion; -1 uses the target default, <=0 disables.",
     )
     parser.add_argument("--output", help="Optional JSON output path")
     return parser
@@ -135,8 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    assert_rom_imported()
-    config = env_config_from_args(args, max_episode_steps_attr="max_steps")
+    assert_rom_imported(args.game)
+    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
     model = PPO.load(args.model, device=resolve_sb3_device(args.device)) if args.model else None
 
     if model is not None:
@@ -150,7 +156,7 @@ def main() -> None:
                     max_steps=args.max_steps,
                     deterministic=not args.stochastic,
                     seed=args.seed + episode_idx,
-                    completion_x_threshold=args.completion_x_threshold,
+                    completion_x_threshold=config.completion_x_threshold,
                 )
                 result.pop("actions")
                 episodes.append(result)
@@ -165,7 +171,7 @@ def main() -> None:
                 policy=args.policy,
                 max_steps=args.max_steps,
                 action_names=action_names,
-                completion_x_threshold=args.completion_x_threshold,
+                completion_x_threshold=config.completion_x_threshold,
             )
             for _ in range(args.episodes)
         ]

@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create or smoke-test an S3/R2 checkpoint bucket")
     parser.add_argument("bucket", help="Bucket name, without s3://")
-    parser.add_argument("--prefix", default="mario-ppo", help="Object prefix to smoke-test")
+    parser.add_argument("--prefix", default="wandb/_smoke", help="Object prefix to smoke-test")
     parser.add_argument("--create", action="store_true", help="Create the bucket if it does not exist")
     parser.add_argument(
         "--keep-smoke-object",

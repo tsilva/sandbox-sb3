@@ -1,4 +1,4 @@
-"""PPO utilities for SuperMarioBros-Nes-v0."""
+"""PPO utilities for Stable Retro games."""
 
 __all__ = ["__version__"]
 

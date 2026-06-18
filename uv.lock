@@ -17,7 +17,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-stable-retro-turbo = "2026-06-17T23:59:59Z"
+stable-retro-turbo = "2026-06-18T23:59:59Z"
 
 [manifest]
 constraints = [
@@ -825,49 +825,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/00/62/791b31e69ae182791ec67f04850f2f062716bbd205483d63a215f3e062d3/mako-1.3.12.tar.gz", hash = "sha256:9f778e93289bd410bb35daadeb4fc66d95a746f0b75777b942088b7fd7af550a", size = 400219, upload-time = "2026-04-28T19:01:08.512Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/b1/a0ec7a5a9db730a08daef1fdfb8090435b82465abbf758a596f0ea88727e/mako-1.3.12-py3-none-any.whl", hash = "sha256:8f61569480282dbf557145ce441e4ba888be453c30989f879f0d652e39f53ea9", size = 78521, upload-time = "2026-04-28T19:01:10.393Z" },
-]
-
-[[package]]
-name = "mario-ppo"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "boto3" },
-    { name = "stable-baselines3", extra = ["extra"] },
-    { name = "stable-retro-turbo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "tensorboard" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "wandb" },
-]
-
-[package.optional-dependencies]
-modal = [
-    { name = "modal" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-    { name = "skypilot", extra = ["kubernetes"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.34,<2" },
-    { name = "modal", marker = "extra == 'modal'", specifier = ">=1.1,<2" },
-    { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.3,<3" },
-    { name = "stable-retro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.0.post11" },
-    { name = "stable-retro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.0.post11" },
-    { name = "tensorboard", specifier = ">=2.16,<3" },
-    { name = "torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==2.11.0" },
-    { name = "wandb", specifier = ">=0.18,<0.23" },
-]
-provides-extras = ["modal"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ruff", specifier = ">=0.15,<0.16" },
-    { name = "skypilot", extras = ["kubernetes"], specifier = ">=0.12.3,<0.13" },
 ]
 
 [[package]]
@@ -1833,8 +1790,51 @@ extra = [
 ]
 
 [[package]]
+name = "stable-retro-ppo"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "boto3" },
+    { name = "stable-baselines3", extra = ["extra"] },
+    { name = "stable-retro-turbo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "tensorboard" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "wandb" },
+]
+
+[package.optional-dependencies]
+modal = [
+    { name = "modal" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+    { name = "skypilot", extra = ["kubernetes"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.34,<2" },
+    { name = "modal", marker = "extra == 'modal'", specifier = ">=1.1,<2" },
+    { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.3,<3" },
+    { name = "stable-retro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.0.post12" },
+    { name = "stable-retro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.0.post12" },
+    { name = "tensorboard", specifier = ">=2.16,<3" },
+    { name = "torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==2.11.0" },
+    { name = "wandb", specifier = ">=0.18,<0.23" },
+]
+provides-extras = ["modal"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ruff", specifier = ">=0.15,<0.16" },
+    { name = "skypilot", extras = ["kubernetes"], specifier = ">=0.12.3,<0.13" },
+]
+
+[[package]]
 name = "stable-retro-turbo"
-version = "1.0.0.post11"
+version = "1.0.0.post12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
@@ -1842,8 +1842,8 @@ dependencies = [
     { name = "pyglet", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/1b/b8ecc1b7d12dae222593374fdcb360d38584d9711472f7aad7432b112b77/stable_retro_turbo-1.0.0.post11-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:04cdcf264a63110c37f30cd3c82cd3f9343212a22fd7cd435630ba2f4bfc1049", size = 81364570, upload-time = "2026-06-16T16:04:19.619Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/04/2deadab2873fe455a89bdcf57098159dbafb6e6235f76dda104b5cfd6b90/stable_retro_turbo-1.0.0.post11-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c30d5c9649c8875efb8a97164d951d32ba7d338be0765a9888ec37077be22d9b", size = 82599258, upload-time = "2026-06-16T16:04:43.796Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/c3/4d17b5a147b0ab7660ed6bd1df64ef0f8a235445084b941407f0a93603e6/stable_retro_turbo-1.0.0.post12-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:da0a41e5cc77ec829b4778d82b8fff43c56711590cba039d0ea5d05a8d5f4c43", size = 81365899, upload-time = "2026-06-17T21:58:54.862Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/62/e82c1b8bcff6f174309981a558a7dae01a948e72da2048b260160da0b5bc/stable_retro_turbo-1.0.0.post12-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cab322908942aa2f17b77456b218980822dda2c9895669d17f4e4a497ca21834", size = 82601420, upload-time = "2026-06-17T21:59:13.768Z" },
 ]
 
 [[package]]

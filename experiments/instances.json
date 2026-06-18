@@ -1,0 +1,37 @@
+{
+  "instances": {
+    "rtx4090": {
+      "label": "beast-3",
+      "infra": "k8s/rtx4090",
+      "accelerator": "RTX4090",
+      "cpus": "12+",
+      "memory": "48+",
+      "image_id": "docker:us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot-gpu:latest",
+      "children": 5,
+      "max_children": 5,
+      "env_threads": 4,
+      "torch_num_threads": 1,
+      "expected_aggregate_wall_fps": 6200,
+      "api_endpoints": [
+        "http://100.118.135.59:46580",
+        "http://192.168.0.151:46580"
+      ],
+      "lower_contention_children": [3, 4],
+      "notes": [
+        "Use 5 children with env_threads=4 for screening queues.",
+        "Use 3-4 children with env_threads=4 when individual latency or lower contention matters.",
+        "Use normal sky launch -c for repeat jobs; avoid ad hoc long trainers via sky exec."
+      ]
+    },
+    "rtx2060": {
+      "label": "beast-2",
+      "infra": "ssh/beast2",
+      "accelerator": "RTX2060",
+      "children": 4,
+      "max_children": 4,
+      "env_threads": 2,
+      "fast_turnaround_children": 2,
+      "fast_turnaround_env_threads": 4
+    }
+  }
+}

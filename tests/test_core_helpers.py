@@ -5,12 +5,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mario_ppo.artifacts import checkpoint_step
-from mario_ppo.cli import build_train_command
-from mario_ppo.env_config import env_config_from_args, parse_states
-from mario_ppo.eval_metrics import episode_rank
-from mario_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
-from mario_ppo.wandb_artifacts import artifact_download_dir, model_artifact_ref, safe_artifact_stem
+import gymnasium as gym
+import numpy as np
+
+from stable_retro_ppo.artifacts import build_s3_artifact_uri, checkpoint_step
+from stable_retro_ppo.callbacks import ThroughputCallback
+from stable_retro_ppo.cli import build_train_command
+from stable_retro_ppo.env import needs_vec_transpose_image
+from stable_retro_ppo.env_config import env_config_from_args, parse_states
+from stable_retro_ppo.eval_metrics import episode_rank
+from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
+from stable_retro_ppo.wandb_artifacts import artifact_download_dir, model_artifact_ref, safe_artifact_stem
 
 
 class EnvConfigFromArgsTests(unittest.TestCase):
@@ -36,8 +41,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             score_progress_clipped=False,
             no_progress_timeout_steps=0,
             no_progress_min_delta=0,
-            completion_x_threshold=3160,
-            no_terminate_on_life_loss=False,
+            completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
+            terminate_on_life_loss=True,
             terminate_on_level_change=False,
             terminate_on_completion=False,
             action_set="right",
@@ -58,6 +63,21 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(target.action_names_for_set("native"), ())
 
 
+class VecImageShapeTests(unittest.TestCase):
+    def test_channel_last_native_observations_need_transpose(self) -> None:
+        space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 4), dtype=np.uint8)
+        self.assertTrue(needs_vec_transpose_image(space))
+
+    def test_channel_first_native_observations_skip_transpose(self) -> None:
+        space = gym.spaces.Box(low=0, high=255, shape=(4, 84, 84), dtype=np.uint8)
+        self.assertFalse(needs_vec_transpose_image(space))
+
+    def test_unexpected_image_shape_fails_loudly(self) -> None:
+        space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 8), dtype=np.uint8)
+        with self.assertRaisesRegex(ValueError, "could not infer"):
+            needs_vec_transpose_image(space)
+
+
 class CommandAndArtifactTests(unittest.TestCase):
     def test_build_train_command_skips_empty_target_kl(self) -> None:
         cmd = build_train_command(
@@ -74,7 +94,7 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertIn("--no-normalize-advantage", cmd)
 
     def test_checkpoint_step_from_sb3_checkpoint_name(self) -> None:
-        self.assertEqual(checkpoint_step(Path("ppo_mario_123456_steps.zip")), 123456)
+        self.assertEqual(checkpoint_step(Path("ppo_retro_123456_steps.zip")), 123456)
         self.assertIsNone(checkpoint_step(Path("final_model.zip")))
 
     def test_wandb_artifact_paths_are_stable(self) -> None:
@@ -94,6 +114,22 @@ class CommandAndArtifactTests(unittest.TestCase):
                 Path(tmp_dir) / "entity_project_run-best_latest",
             )
 
+    def test_s3_artifact_uri_includes_wandb_rom_id_prefix(self) -> None:
+        args = argparse.Namespace(game="TestGame-Platform", run_name="candidate/run")
+        self.assertEqual(
+            build_s3_artifact_uri("s3://wandb", args, Path("final_model.zip"), "final"),
+            "s3://wandb/TestGame-Platform/candidate-run/final/final_model.zip",
+        )
+        self.assertEqual(
+            build_s3_artifact_uri(
+                "s3://wandb/TestGame-Platform",
+                args,
+                Path("ppo_test_100_steps.zip"),
+                "checkpoint",
+            ),
+            "s3://wandb/TestGame-Platform/candidate-run/checkpoint/ppo_test_100_steps.zip",
+        )
+
 
 class EvalMetricTests(unittest.TestCase):
     def test_episode_rank_prefers_completion_then_progress_then_reward(self) -> None:
@@ -102,6 +138,44 @@ class EvalMetricTests(unittest.TestCase):
         better_progress = {"level_complete": False, "max_x_pos": 4500, "reward": 0.0}
         self.assertGreater(episode_rank(complete), episode_rank(incomplete))
         self.assertGreater(episode_rank(better_progress), episode_rank(incomplete))
+
+
+class ThroughputCallbackTests(unittest.TestCase):
+    def test_logs_rollout_fps_and_next_iteration_instant_fps(self) -> None:
+        class Logger:
+            def __init__(self) -> None:
+                self.records: list[tuple[str, float]] = []
+
+            def record(self, key: str, value: float) -> None:
+                self.records.append((key, value))
+
+        class Model:
+            def __init__(self) -> None:
+                self.logger = Logger()
+
+        times = iter([0.0, 2.0, 5.0, 7.0])
+        callback = ThroughputCallback(clock=lambda: next(times))
+        model = Model()
+        callback.model = model  # type: ignore[assignment]
+
+        callback.num_timesteps = 0
+        callback._on_rollout_start()
+        callback.num_timesteps = 100
+        callback._on_rollout_end()
+
+        callback.num_timesteps = 100
+        callback._on_rollout_start()
+        callback.num_timesteps = 220
+        callback._on_rollout_end()
+
+        self.assertEqual(
+            model.logger.records,
+            [
+                ("time/rollout_fps", 50.0),
+                ("time/rollout_fps", 60.0),
+                ("time/fps_instant", 20.0),
+            ],
+        )
 
 
 if __name__ == "__main__":

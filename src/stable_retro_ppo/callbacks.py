@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections import deque
 from pathlib import Path
+from typing import Callable
 
 from stable_baselines3.common.callbacks import BaseCallback
 
-from mario_ppo.artifacts import checkpoint_step, log_wandb_model_artifact, wandb_artifacts_enabled
+from stable_retro_ppo.artifacts import checkpoint_step, log_wandb_model_artifact, wandb_artifacts_enabled
 
 
 class WandbCheckpointArtifactCallback(BaseCallback):
@@ -49,6 +51,50 @@ class WandbCheckpointArtifactCallback(BaseCallback):
                 aliases=aliases,
             )
             self.logged_paths.add(resolved_path)
+
+
+class ThroughputCallback(BaseCallback):
+    """Log rollout-only and full-loop instantaneous throughput."""
+
+    def __init__(self, clock: Callable[[], float] | None = None):
+        super().__init__()
+        self.clock = clock or time.perf_counter
+        self.rollout_start_time: float | None = None
+        self.rollout_start_timesteps: int | None = None
+        self.previous_rollout_start_time: float | None = None
+        self.previous_rollout_start_timesteps: int | None = None
+        self.pending_fps_instant: float | None = None
+
+    def _on_rollout_start(self) -> None:
+        now = self.clock()
+        if (
+            self.previous_rollout_start_time is not None
+            and self.previous_rollout_start_timesteps is not None
+        ):
+            elapsed = now - self.previous_rollout_start_time
+            steps = self.num_timesteps - self.previous_rollout_start_timesteps
+            if elapsed > 0 and steps > 0:
+                self.pending_fps_instant = steps / elapsed
+
+        self.rollout_start_time = now
+        self.rollout_start_timesteps = self.num_timesteps
+        self.previous_rollout_start_time = now
+        self.previous_rollout_start_timesteps = self.num_timesteps
+
+    def _on_rollout_end(self) -> None:
+        now = self.clock()
+        if self.rollout_start_time is not None and self.rollout_start_timesteps is not None:
+            elapsed = now - self.rollout_start_time
+            steps = self.num_timesteps - self.rollout_start_timesteps
+            if elapsed > 0 and steps > 0:
+                self.logger.record("time/rollout_fps", steps / elapsed)
+
+        if self.pending_fps_instant is not None:
+            self.logger.record("time/fps_instant", self.pending_fps_instant)
+            self.pending_fps_instant = None
+
+    def _on_step(self) -> bool:
+        return True
 
 
 class RollingCompletionStopCallback(BaseCallback):

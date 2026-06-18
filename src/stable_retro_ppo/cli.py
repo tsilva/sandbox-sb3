@@ -4,8 +4,8 @@ import argparse
 from collections.abc import Mapping
 from typing import Any
 
-from mario_ppo.env import DEFAULT_HUD_CROP_TOP
-from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT
+from stable_retro_ppo.env import EnvConfig
+from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT
 
 
 TRAINING_PRESETS: dict[str, dict[str, Any]] = {
@@ -16,7 +16,7 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "max_episode_steps": 600,
         "checkpoint_freq": 256,
         "run_name": "smoke",
-        "run_description": "Tiny local smoke run that checks the PPO training path compiles and saves.",
+        "run_description": "Tiny local smoke run that checks the Stable Retro PPO training path compiles and saves.",
     },
     "baseline": {},
     "modal-t4": {
@@ -98,7 +98,6 @@ TRAIN_TRUE_FLAGS = {
     "use_retro_reward": "--use-retro-reward",
     "clip_rewards": "--clip-rewards",
     "score_progress_clipped": "--score-progress-clipped",
-    "no_terminate_on_life_loss": "--no-terminate-on-life-loss",
     "terminate_on_level_change": "--terminate-on-level-change",
     "terminate_on_completion": "--terminate-on-completion",
     "wandb": "--wandb",
@@ -107,6 +106,7 @@ TRAIN_TRUE_FLAGS = {
 TRAIN_BOOLEAN_OPTIONS = {
     "max_pool_frames": ("--max-pool-frames", "--no-max-pool-frames"),
     "normalize_advantage": ("--normalize-advantage", "--no-normalize-advantage"),
+    "terminate_on_life_loss": ("--terminate-on-life-loss", "--no-terminate-on-life-loss"),
 }
 TRAIN_COMMAND_FIELDS = (
     tuple(TRAIN_VALUE_OPTIONS) + tuple(TRAIN_TRUE_FLAGS) + tuple(TRAIN_BOOLEAN_OPTIONS)
@@ -114,7 +114,7 @@ TRAIN_COMMAND_FIELDS = (
 
 
 def build_train_command(options: Mapping[str, Any]) -> list[str]:
-    cmd = ["python", "-m", "mario_ppo.train"]
+    cmd = ["python", "-m", "stable_retro_ppo.train"]
     for key, flag in TRAIN_VALUE_OPTIONS.items():
         value = options.get(key)
         if value is None or value == "":
@@ -137,7 +137,8 @@ def build_train_command(options: Mapping[str, Any]) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train PPO on SuperMarioBros-Nes-v0")
+    parser_defaults_env = EnvConfig()
+    parser = argparse.ArgumentParser(description="Train PPO on an imported Stable Retro game")
     parser.add_argument(
         "--preset",
         choices=sorted(TRAINING_PRESETS),
@@ -158,15 +159,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="PyTorch CPU intra-op threads; <=0 leaves the torch default.",
     )
     parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument("--run-name", default="ppo_level1_1")
+    parser.add_argument("--run-name", default="ppo_retro")
     parser.add_argument(
         "--run-description",
         default="",
         help="Human-readable description of the experiment or ablation being run.",
     )
     parser.add_argument("--runs-dir", default="runs")
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument(
+        "--game",
+        default=parser_defaults_env.game,
+        help="Stable Retro game id. Defaults to RETRO_GAME when set.",
+    )
+    parser.add_argument(
+        "--state",
+        default=parser_defaults_env.state,
+        help="Stable Retro state. If omitted, registered targets may provide a default.",
+    )
     parser.add_argument(
         "--states",
         default="",
@@ -183,8 +192,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hud-crop-top",
         type=int,
-        default=DEFAULT_HUD_CROP_TOP,
-        help="Crop this many pixels from the top of raw frames before grayscale resize; 32 removes the Mario HUD.",
+        default=parser_defaults_env.hud_crop_top,
+        help="Crop this many pixels from the top of raw frames before grayscale resize; -1 uses the target default.",
     )
     parser.add_argument(
         "--eval-freq",
@@ -197,8 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--completion-x-threshold",
         type=int,
-        default=3160,
-        help="Treat an episode as level-complete if max_x_pos reaches this value; set <=0 to disable.",
+        default=parser_defaults_env.completion_x_threshold,
+        help=(
+            "Treat an episode as complete if target progress reaches this value; "
+            "-1 uses the target default, <=0 disables threshold completion."
+        ),
     )
     parser.add_argument(
         "--no-eval-videos", action="store_true", help="Disable best-episode eval videos"
@@ -282,8 +294,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clip-rewards", action="store_true")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=parser_defaults_env.reward_mode,
         help="Target reward mode. Use native for unknown games without a custom target tracker.",
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
@@ -310,7 +322,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Minimum progress_delta that resets the no-progress timeout.",
     )
-    parser.add_argument("--no-terminate-on-life-loss", action="store_true")
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=parser_defaults_env.terminate_on_life_loss,
+        help="Terminate episodes when the target tracker reports a life loss.",
+    )
     parser.add_argument(
         "--terminate-on-level-change",
         action="store_true",
@@ -321,7 +338,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="End the episode on either real level change or the configured completion x-threshold.",
     )
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
+    parser.add_argument(
+        "--action-set",
+        default=parser_defaults_env.action_set,
+        help="Target-specific action set name, native, or auto for the target default.",
+    )
     parser.add_argument("--resume", help="Path to an existing PPO .zip checkpoint")
     parser.add_argument("--wandb", action="store_true", help="Log training to Weights & Biases")
     parser.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
@@ -336,8 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--wandb-artifact-storage-uri",
         default="",
         help=(
-            "Optional s3://bucket/prefix base URI for model artifacts. When set, model zips "
-            "are uploaded there and W&B logs reference artifacts instead of storing file bytes."
+            "Optional s3://bucket/prefix base URI for model artifacts. Model zips are stored "
+            "under <game-id>/... below that URI, and W&B logs reference artifacts instead "
+            "of storing file bytes."
         ),
     )
     return parser

@@ -4,7 +4,7 @@ import re
 import sys
 from pathlib import Path
 
-from mario_ppo.wandb_utils import load_wandb_env
+from stable_retro_ppo.wandb_utils import load_wandb_env
 
 
 def safe_artifact_stem(value: str, fallback: str = "artifact") -> str:

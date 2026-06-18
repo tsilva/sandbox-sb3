@@ -15,16 +15,16 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import DEFAULT_HUD_CROP_TOP, assert_rom_imported
-from mario_ppo.env_config import env_config_from_args
-from mario_ppo.eval_runner import evaluate_model_episodes
-from mario_ppo.wandb_artifacts import (
+from stable_retro_ppo.device import resolve_sb3_device
+from stable_retro_ppo.env import EnvConfig, assert_rom_imported, resolve_env_config
+from stable_retro_ppo.env_config import env_config_from_args
+from stable_retro_ppo.eval_runner import evaluate_model_episodes
+from stable_retro_ppo.wandb_artifacts import (
     artifact_download_dir,
     download_model_artifact,
     model_artifact_ref,
 )
-from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
+from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
 
 
 def artifact_ref(args: argparse.Namespace) -> str:
@@ -52,11 +52,12 @@ def resolve_model_path(args: argparse.Namespace) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    defaults = EnvConfig()
     parser = argparse.ArgumentParser(
-        description="Run episodes and save the best-reward Mario video"
+        description="Run episodes and save the best-reward Stable Retro video"
     )
     parser.add_argument(
-        "run_name", nargs="?", help="Training run name, e.g. modal_right_action_250k_lr1e4_eval50"
+        "run_name", nargs="?", help="Training run name or W&B artifact prefix"
     )
     parser.add_argument("--model", help="Local PPO .zip model path")
     parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT_PATH, help="W&B entity/project")
@@ -65,15 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", default="latest")
     parser.add_argument("--root", default="runs/wandb_artifacts")
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument("--game", default=defaults.game)
+    parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=1200)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
-        default=DEFAULT_HUD_CROP_TOP,
+        default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
     parser.add_argument("--seed", type=int, default=7)
@@ -81,11 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="right")
+    parser.add_argument("--action-set", default=defaults.action_set)
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=defaults.reward_mode,
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
@@ -97,12 +98,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-progress-clipped", action="store_true")
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.terminate_on_life_loss,
+    )
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
     parser.add_argument(
         "--completion-x-threshold",
         type=int,
-        default=3160,
+        default=defaults.completion_x_threshold,
         help="Stored in the summary; ranking uses level_complete first, then max_x_pos, then reward.",
     )
     parser.add_argument("--output", default="runs/videos/best_episode.mp4")
@@ -121,10 +127,10 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    assert_rom_imported()
+    assert_rom_imported(args.game)
     model_path = resolve_model_path(args)
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
-    config = env_config_from_args(args, max_episode_steps_attr="max_steps")
+    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
     output = Path(args.output)
     metrics, video_path = evaluate_model_episodes(
         model=model,
@@ -133,7 +139,7 @@ def main() -> None:
         seed=args.seed,
         max_steps=args.max_steps,
         deterministic=args.deterministic,
-        completion_x_threshold=args.completion_x_threshold,
+        completion_x_threshold=config.completion_x_threshold,
         capture_best_video=True,
         video_path=output,
         video_fps=args.fps,

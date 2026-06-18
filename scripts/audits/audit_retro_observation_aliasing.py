@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 from stable_retro import StableRetroNativeVecEnv
 
-from mario_ppo.env import ACTION_LIBRARY, EnvConfig, action_names_for_set, make_vec_envs
+from stable_retro_ppo.env import EnvConfig, action_names_for_set, make_vec_envs
+from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_array(array: Any) -> str:
@@ -79,11 +80,14 @@ def mutation_check(reset_obs: np.ndarray, step_fn, actions: np.ndarray, steps: i
 
 def run_raw(copy_observations: bool) -> dict[str, Any]:
     config = EnvConfig(
+        game=SuperMarioBrosNesV0Target.game,
+        state=SuperMarioBrosNesV0Target.default_state,
+        hud_crop_top=SuperMarioBrosNesV0Target.default_hud_crop_top,
         reward_mode="score",
         terminal_reward=50.0,
         reward_scale=10.0,
         action_set="simple",
-        completion_x_threshold=3160,
+        completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
         terminate_on_completion=True,
         env_threads=4,
     )
@@ -91,11 +95,11 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
     env = StableRetroNativeVecEnv(
         config.game,
         num_envs=n_envs,
-        state=config.state,
+        state=config.state or None,
         num_threads=4,
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),
-        obs_crop=(config.hud_crop_top, 0, 0, 0),
+        obs_crop=(config.hud_crop_top, 0, 0, 0) if config.hud_crop_top else None,
         obs_grayscale=True,
         obs_resize_algorithm=config.obs_resize_algorithm,
         frame_skip=config.frame_skip,
@@ -105,8 +109,9 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
     )
     env.seed(23)
     obs = env.reset()
-    action_names = action_names_for_set(config.action_set)
-    action_masks = np.stack([ACTION_LIBRARY[name] for name in action_names]).astype(np.int8)
+    action_names = action_names_for_set(config.action_set, game=config.game)
+    target = target_for_game(config.game)
+    action_masks = np.stack([target.action_library[name] for name in action_names]).astype(np.int8)
     actions = np.asarray([action_masks[index % len(action_masks)] for index in range(n_envs)])
     try:
         records = mutation_check(obs, env.step, actions)
@@ -120,18 +125,21 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
 
 def run_wrapped() -> dict[str, Any]:
     config = EnvConfig(
+        game=SuperMarioBrosNesV0Target.game,
+        state=SuperMarioBrosNesV0Target.default_state,
+        hud_crop_top=SuperMarioBrosNesV0Target.default_hud_crop_top,
         reward_mode="score",
         terminal_reward=50.0,
         reward_scale=10.0,
         action_set="simple",
-        completion_x_threshold=3160,
+        completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
         terminate_on_completion=True,
         env_threads=4,
     )
     n_envs = 16
     env = make_vec_envs(config=config, n_envs=n_envs, seed=23)
     obs = env.reset()
-    actions = np.arange(n_envs, dtype=np.int64) % len(action_names_for_set(config.action_set))
+    actions = np.arange(n_envs, dtype=np.int64) % len(action_names_for_set(config.action_set, game=config.game))
 
     def step_fn(discrete_actions):
         return env.step(discrete_actions)

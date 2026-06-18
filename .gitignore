@@ -31,6 +31,7 @@ htmlcov/
 !.env.example
 .modal/
 sky_*.yaml
+experiments/launches/*.local.json
 
 # Matplotlib and notebook caches
 .matplotlib/

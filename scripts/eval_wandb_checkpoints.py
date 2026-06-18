@@ -15,12 +15,12 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from stable_baselines3 import PPO
 
-from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import DEFAULT_HUD_CROP_TOP, assert_rom_imported
-from mario_ppo.env_config import env_config_from_args
-from mario_ppo.eval_runner import evaluate_model_episodes
-from mario_ppo.wandb_artifacts import model_zip_from_download, safe_artifact_stem
-from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
+from stable_retro_ppo.device import resolve_sb3_device
+from stable_retro_ppo.env import EnvConfig, assert_rom_imported, resolve_env_config
+from stable_retro_ppo.env_config import env_config_from_args
+from stable_retro_ppo.eval_runner import evaluate_model_episodes
+from stable_retro_ppo.wandb_artifacts import model_zip_from_download, safe_artifact_stem
+from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 def slug(value: str) -> str:
@@ -130,7 +130,7 @@ def evaluate_checkpoint(
     artifact_name: str,
 ) -> tuple[dict[str, Any], Path | None]:
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
-    config = env_config_from_args(args, max_episode_steps_attr="max_steps")
+    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
     video_path = (
         Path(args.eval_dir) / args.run_name / "videos" / f"best_episode_{checkpoint_step}_steps.mp4"
         if args.record_best_video
@@ -143,7 +143,7 @@ def evaluate_checkpoint(
         seed=args.seed + checkpoint_step,
         max_steps=args.max_steps,
         deterministic=args.deterministic,
-        completion_x_threshold=args.completion_x_threshold,
+        completion_x_threshold=config.completion_x_threshold,
         capture_best_video=args.record_best_video,
         video_path=video_path,
         video_fps=args.video_fps,
@@ -269,7 +269,8 @@ def promote_best_artifact(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate pending W&B Mario PPO checkpoints")
+    defaults = EnvConfig()
+    parser = argparse.ArgumentParser(description="Evaluate pending W&B Stable Retro PPO checkpoints")
     parser.add_argument("run_name", nargs="?", help="Training run name / artifact prefix")
     parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT_PATH, help="W&B entity/project")
     parser.add_argument("--artifact", action="append", help="Explicit checkpoint artifact ref")
@@ -280,25 +281,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Re-evaluate checkpoints already logged"
     )
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument("--game", default=defaults.game)
+    parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=2500)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
-        default=DEFAULT_HUD_CROP_TOP,
+        default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
     parser.add_argument("--seed", type=int, default=10007)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="right")
+    parser.add_argument("--action-set", default=defaults.action_set)
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=defaults.reward_mode,
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
@@ -310,10 +311,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-progress-clipped", action="store_true")
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--no-terminate-on-life-loss", action="store_true")
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.terminate_on_life_loss,
+    )
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--completion-x-threshold", type=int, default=3160)
+    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
     parser.add_argument("--record-best-video", action="store_true")
     parser.add_argument("--video-fps", type=float, default=30.0)
     parser.add_argument("--video-scale", type=int, default=4)
@@ -334,7 +339,7 @@ def main() -> None:
     if not args.run_name:
         raise SystemExit("run_name is required")
 
-    assert_rom_imported()
+    assert_rom_imported(args.game)
     artifacts = find_checkpoint_artifacts(args)
     if not artifacts:
         print("No checkpoint artifacts found")

@@ -16,8 +16,9 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.utils import set_random_seed
 from stable_retro import StableRetroNativeVecEnv
 
-from mario_ppo.device import resolve_sb3_device
-from mario_ppo.env import ACTION_LIBRARY, EnvConfig, action_names_for_set, assert_rom_imported, make_vec_envs
+from stable_retro_ppo.device import resolve_sb3_device
+from stable_retro_ppo.env import EnvConfig, action_names_for_set, assert_rom_imported, make_vec_envs
+from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_bytes(data: bytes) -> str:
@@ -57,7 +58,7 @@ def make_raw_env(config: EnvConfig, n_envs: int, env_threads: int, env_kwargs: d
     return StableRetroNativeVecEnv(
         config.game,
         num_envs=n_envs,
-        state=config.state,
+        state=config.state or None,
         num_threads=env_threads,
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),
@@ -105,8 +106,9 @@ def env_trace(
     env_threads: int,
     env_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    action_names = action_names_for_set(config.action_set)
-    action_masks = np.stack([ACTION_LIBRARY[name] for name in action_names]).astype(np.int8)
+    action_names = action_names_for_set(config.action_set, game=config.game)
+    target = target_for_game(config.game)
+    action_masks = np.stack([target.action_library[name] for name in action_names]).astype(np.int8)
     action_table = action_indices(action_seed, steps, n_envs, len(action_names))
     sample_steps = {1, 2, 4, 8, 16, 32, 64, 128, steps}
 
@@ -327,10 +329,13 @@ def main() -> None:
     parser.add_argument("--device", default="cuda", choices=["auto", "cpu", "cuda", "mps"])
     args = parser.parse_args()
 
-    assert_rom_imported()
+    assert_rom_imported(SuperMarioBrosNesV0Target.game)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     config = EnvConfig(
+        game=SuperMarioBrosNesV0Target.game,
+        state=SuperMarioBrosNesV0Target.default_state,
+        hud_crop_top=SuperMarioBrosNesV0Target.default_hud_crop_top,
         frame_skip=4,
         max_pool_frames=True,
         max_episode_steps=4500,
@@ -338,7 +343,7 @@ def main() -> None:
         terminal_reward=50.0,
         reward_scale=10.0,
         action_set="simple",
-        completion_x_threshold=3160,
+        completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
         terminate_on_completion=True,
         env_threads=args.env_threads,
     )

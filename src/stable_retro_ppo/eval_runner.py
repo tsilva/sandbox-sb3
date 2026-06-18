@@ -5,9 +5,9 @@ from typing import Any
 
 import torch
 
-from mario_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
-from mario_ppo.eval_metrics import episode_rank, run_eval_episode, summarize_episode_results
-from mario_ppo.video import replay_actions_for_video, write_video
+from stable_retro_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
+from stable_retro_ppo.eval_metrics import episode_rank, run_eval_episode, summarize_episode_results
+from stable_retro_ppo.video import replay_actions_for_video, write_video
 
 
 def evaluate_model_episodes(

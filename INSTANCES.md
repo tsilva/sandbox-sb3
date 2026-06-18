@@ -1,6 +1,6 @@
 # GPU Instances
 
-Last updated: 2026-06-17
+Last updated: 2026-06-18
 
 Use this file as the repo-local source of truth for known GPU instances, launch targets, benchmark-backed concurrency, and operational gotchas. Re-check live availability before launching, but do not rediscover these basics from scratch unless the facts here fail.
 
@@ -38,11 +38,15 @@ exists, object upload/download worked, and the smoke object was deleted.
 
 Training support:
 
-- `mario_ppo.train` reads `--wandb-artifact-storage-uri`, or falls back to
+- `stable_retro_ppo.train` reads `--wandb-artifact-storage-uri`, or falls back to
   `WANDB_ARTIFACT_STORAGE_URI`, then `CHECKPOINT_BUCKET_URI`.
 - When that URI is set, checkpoint/final/best model zips upload to R2/S3 and W&B
   logs reference artifacts with the existing aliases such as `latest`, `final`,
   `best`, and `step-<N>`.
+- Artifact objects are stored below `<game-id>/...` under the configured bucket.
+  With the current R2 bucket this means `s3://wandb/<game-id>/...`. If the
+  configured URI already ends with `<game-id>`, training uses it as-is;
+  otherwise it appends that game-specific segment to the configured bucket/prefix.
 - Without that URI, W&B artifact behavior remains direct file upload.
 
 Preferred SkyPilot launch pattern from this repo:
@@ -86,7 +90,7 @@ PY
     --prefix "$(python - <<'PY'
 import os
 from urllib.parse import urlparse
-print(urlparse(os.environ["CHECKPOINT_BUCKET_URI"]).path.strip("/") or "mario-ppo")
+print(urlparse(os.environ["CHECKPOINT_BUCKET_URI"]).path.strip("/") or "wandb/_smoke")
 PY
 )"
 )
@@ -98,7 +102,8 @@ PY
 
 - SkyPilot infra: `k8s/rtx4090`
 - GPU host SSH: `ssh tsilva@beast-3`
-- SkyPilot dashboard/API server: `http://192.168.0.151:46580`
+- SkyPilot dashboard/API server on LAN: `http://192.168.0.151:46580`
+- SkyPilot dashboard/API server from the current Mac/Codex network: `http://100.118.135.59:46580`
 - GPU: NVIDIA GeForce RTX 4090, 24 GB VRAM
 - Observed driver: `595.71.05`, reporting CUDA support up to `13.2`
 - Default SkyPilot image: `docker:us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot-gpu:latest`
@@ -122,10 +127,18 @@ Default to 5 children with `env_threads=4` for screening queues. Use 3-4 childre
 ### Operational Notes
 
 - If a single RTX4090 is already held by an `UP` SkyPilot cluster with no active managed jobs, launching a second Kubernetes cluster may fail with `Insufficient nvidia.com/gpu`. Prefer submitting to the warm cluster with `sky launch -c <existing-cluster> -y <task.yaml>` when reuse is intended.
+- If the local SkyPilot CLI reports only SSH resources or checks `http://127.0.0.1:46581`, point it at the beast-3 API server first with `sky api login -e http://100.118.135.59:46580`.
 - Use normal `sky launch -c <warm-cluster> -y <task.yaml>` for valid repeat runs. Starting a second long trainer via ad hoc `sky exec` inside an already-running task produced pathological throughput around 140 fps.
 - `sky cancel` against `k8s/rtx4090` jobs can fail with `PermissionError: [Errno 13] Permission denied` while trying to `os.killpg`. If that happens, identify the training process group with `sky exec <cluster> 'ps -eo pid,ppid,pgid,stat,cmd | grep <run-name>'`, terminate the process group with `kill -TERM -<pgid>`, verify no trainer remains, then run `sky down -y <cluster>`.
 - The local SkyPilot CLI may not expose a useful general `sky cp`. For small artifact retrieval from Kubernetes-backed clusters, identify the pod on `beast-3` and stream files from `/home/sky/sky_workdir` with `kubectl exec ... -- cat <remote-file> > <local-file>`.
 - The default interactive kube context on the server may not have the `rtx4090` alias. For manual Kubernetes inspection, explicitly use `KUBECONFIG=/home/tsilva/.kube/config`.
+
+### Stable Retro Runtime Notes
+
+- `stable-retro-turbo==1.0.0.post12` returns native-vector training observations in channel-first shape `(n_envs, 4, 84, 84)`, so the repo must skip `VecTransposeImage` for that shape and only apply it to channel-last `(n_envs, 84, 84, 4)` runtimes.
+- On 2026-06-18, a single RTX4090 repro of W&B run `lexxixz3` with post12, seed 24, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, and a strict `100/100` terminal-episode stop trained successfully to the 5M cap but did not early-stop: final `68/100` recent completions, `189` total completions, `5,005,312` timesteps, `27m34s` progress-bar wall time, and final logged fps `3023`.
+- On 2026-06-18, a matched three-seed RTX4090 batch compared `stable-retro-turbo==1.0.0.post11` and `1.0.0.post12` with seeds `23`, `24`, and `25`, 3 concurrent children, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, strict `100/100` terminal-episode stop, and a 5M cap. Neither version reached the strict stop. Final recent completion rates were post11: seed23 `19/100`, seed24 `90/100`, seed25 `22/100`; post12: seed23 `6/100`, seed24 `85/100`, seed25 `55/100`. Mean final rate was post11 `0.437` vs post12 `0.487`; median final rate was post11 `0.22` vs post12 `0.55`; total completions were post11 `576` vs post12 `428`. Final logged SB3 fps averaged `1917` for post11 and `1943` for post12 in this concurrent shape, so this training workload did not show the package-level `+23.6%` throughput increase.
+- On 2026-06-18, a five-seed post12 follow-up used new seeds `26`-`30`, 5 concurrent children, and the same `lexxixz3` config. Final recent completion rates were seed26 `0/100`, seed27 `32/100`, seed28 `5/100`, seed29 `90/100`, and seed30 `66/100`; total completions were `0`, `390`, `15`, `413`, and `153`. Across all eight post12 seeds tested so far (`23`-`30`), mean final rate is `0.424`, median `0.435`, max `0.90`, and total completions `1399`. The five-child batch averaged `1353` final logged fps per child, about `6766` aggregate fps, while the earlier three-child post12 batch averaged `1943` per child, about `5829` aggregate fps.
 
 Manual inspection examples:
 
@@ -197,7 +210,6 @@ ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 \
 
 ## Related Repo Files
 
-- `experiments/history/EXPERIMENT_MEMORY.md`: benchmark history and interpretation.
 - `GOAL.md`: current RTX4090 scheduling decision for the active screening goal.
 - root-level `sky_*.yaml`: ignored local launch files; promote reusable shapes under
   `experiments/launches/`.

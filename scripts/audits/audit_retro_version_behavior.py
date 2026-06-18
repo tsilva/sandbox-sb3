@@ -10,7 +10,8 @@ from typing import Any
 import numpy as np
 from stable_retro import StableRetroNativeVecEnv
 
-from mario_ppo.env import EnvConfig, action_names_for_set, make_fast_mario_env, make_vec_envs
+from stable_retro_ppo.env import EnvConfig, action_names_for_set, make_fast_retro_env, make_vec_envs
+from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_array(array: Any) -> str:
@@ -60,6 +61,9 @@ def normalize_info(info: dict[str, Any]) -> dict[str, Any]:
 
 def config_from_args(args: argparse.Namespace) -> EnvConfig:
     return EnvConfig(
+        game=SuperMarioBrosNesV0Target.game,
+        state=SuperMarioBrosNesV0Target.default_state,
+        hud_crop_top=SuperMarioBrosNesV0Target.default_hud_crop_top,
         frame_skip=4,
         max_pool_frames=True,
         max_episode_steps=4500,
@@ -67,7 +71,7 @@ def config_from_args(args: argparse.Namespace) -> EnvConfig:
         terminal_reward=50.0,
         reward_scale=10.0,
         action_set="simple",
-        completion_x_threshold=3160,
+        completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
         terminate_on_completion=True,
         env_threads=args.env_threads,
     )
@@ -91,9 +95,9 @@ def action_sequence(name: str, length: int, n_actions: int, seed: int) -> list[i
 
 
 def run_single_trace(config: EnvConfig, sequence_name: str, length: int, seed: int) -> dict[str, Any]:
-    action_names = action_names_for_set(config.action_set)
+    action_names = action_names_for_set(config.action_set, game=config.game)
     actions = action_sequence(sequence_name, length, len(action_names), seed)
-    env = make_fast_mario_env(config=config, seed=seed)
+    env = make_fast_retro_env(config=config, seed=seed)
     obs, info = env.reset(seed=seed)
     obs_hashes = {"reset": sha_array(obs)}
     reward_sum = 0.0
@@ -131,7 +135,7 @@ def run_single_trace(config: EnvConfig, sequence_name: str, length: int, seed: i
 
 
 def run_vector_trace(config: EnvConfig, sequence_name: str, length: int, seed: int, n_envs: int):
-    action_names = action_names_for_set(config.action_set)
+    action_names = action_names_for_set(config.action_set, game=config.game)
     base_actions = action_sequence(sequence_name, length * n_envs, len(action_names), seed)
     env = make_vec_envs(config=config, n_envs=n_envs, seed=seed)
     obs = env.reset()
@@ -194,22 +198,14 @@ def run_raw_native_vector_trace(
     seed: int,
     n_envs: int,
 ) -> dict[str, Any]:
-    action_names = action_names_for_set(config.action_set)
-    action_masks = {
-        "noop": np.array([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int8),
-        "right": np.array([0, 0, 0, 0, 0, 0, 0, 1, 0], dtype=np.int8),
-        "right_b": np.array([1, 0, 0, 0, 0, 0, 0, 1, 0], dtype=np.int8),
-        "right_a": np.array([0, 0, 0, 0, 0, 0, 0, 1, 1], dtype=np.int8),
-        "right_a_b": np.array([1, 0, 0, 0, 0, 0, 0, 1, 1], dtype=np.int8),
-        "a": np.array([0, 0, 0, 0, 0, 0, 0, 0, 1], dtype=np.int8),
-        "left": np.array([0, 0, 0, 0, 0, 0, 1, 0, 0], dtype=np.int8),
-    }
-    index_to_mask = [action_masks[name] for name in action_names]
+    action_names = action_names_for_set(config.action_set, game=config.game)
+    target = target_for_game(config.game)
+    index_to_mask = [target.action_library[name] for name in action_names]
     action_indices = action_sequence(sequence_name, length * n_envs, len(action_names), seed)
     env = StableRetroNativeVecEnv(
         config.game,
         num_envs=n_envs,
-        state=config.state,
+        state=config.state or None,
         num_threads=config.env_threads if config.env_threads > 0 else min(n_envs, 16),
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),

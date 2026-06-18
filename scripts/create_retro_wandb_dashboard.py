@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the focused W&B workspace for Mario PPO sweep diagnosis."""
+"""Create a focused W&B workspace for Stable Retro PPO sweep diagnosis."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ except ImportError as exc:  # pragma: no cover - operator-facing dependency hint
 
 
 DEFAULT_QUERY = r"^b2[0-9]_"
-DEFAULT_PROJECT = "SuperMarioBros-NES"
+DEFAULT_PROJECT = "StableRetro-PPO"
 DEFAULT_ENTITY = "tsilva"
 
 
@@ -94,7 +94,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                 panels=[
                     markdown(
                         """
-                        Primary question: which runs become reliable at Level1-1, not merely high reward?
+                        Primary question: which runs become reliable at the selected target, not merely high reward?
 
                         Read `train/completion_episode_rate` first. It is already the rolling success rate over the last 100 completed terminal episodes, so the dashboard uses no extra smoothing. Then use `completion_episodes_total` to distinguish early discovery from reliable exploitation, and use PPO internals to diagnose whether promising policies were destroyed by later updates.
                         """,
@@ -108,7 +108,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                 is_open=True,
                 panels=[
                     line(
-                        "North star: Level1-1 completion rate over last 100 terminal episodes",
+                        "North star: completion rate over last 100 terminal episodes",
                         "train/completion_episode_rate",
                         x=0,
                         y=0,
@@ -153,7 +153,9 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                 panels=[
                     line("Episode reward mean", "rollout/ep_rew_mean", x=0, y=0),
                     line("Episode length mean", "rollout/ep_len_mean", x=12, y=0),
-                    line("Training fps", "time/fps", x=0, y=6),
+                    line("Cumulative fps", "time/fps", x=0, y=6),
+                    line("Rollout fps", "time/rollout_fps", x=12, y=6),
+                    line("Instant full-loop fps", "time/fps_instant", x=0, y=12),
                 ],
             ),
             ws.Section(
@@ -187,7 +189,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--entity", default=DEFAULT_ENTITY)
     parser.add_argument("--project", default=DEFAULT_PROJECT)
-    parser.add_argument("--name", default="Mario 100of100 Sweep Diagnosis")
+    parser.add_argument("--name", default="Stable Retro PPO Sweep Diagnosis")
     parser.add_argument("--query", default=DEFAULT_QUERY)
     args = parser.parse_args()
 

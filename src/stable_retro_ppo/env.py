@@ -19,16 +19,14 @@ from stable_retro import StableRetroNativeVecEnv
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv
 from stable_baselines3.common.vec_env import VecEnvWrapper, VecMonitor, VecTransposeImage
 
-from mario_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
+from stable_retro_ppo.targets import GenericRetroTarget, target_for_game
 
-GAME = SuperMarioBrosNesV0Target.game
-DEFAULT_STATE = SuperMarioBrosNesV0Target.default_state
+GAME = os.environ.get("RETRO_GAME", "")
+DEFAULT_STATE = os.environ.get("RETRO_STATE", "")
 DEFAULT_OBS_RESIZE_ALGORITHM = "area"
-DEFAULT_HUD_CROP_TOP = SuperMarioBrosNesV0Target.default_hud_crop_top
-DEFAULT_COMPLETION_X_THRESHOLD = SuperMarioBrosNesV0Target.default_completion_x_threshold
-ACTION_NAMES = SuperMarioBrosNesV0Target.action_sets[SuperMarioBrosNesV0Target.default_action_set]
-ACTION_LIBRARY = SuperMarioBrosNesV0Target.action_library
-ACTION_SETS = SuperMarioBrosNesV0Target.action_sets
+DEFAULT_HUD_CROP_TOP = GenericRetroTarget.default_hud_crop_top
+DEFAULT_COMPLETION_X_THRESHOLD = GenericRetroTarget.default_completion_x_threshold
+FRAME_STACK_CHANNELS = {1, 3, 4}
 
 
 def action_names_for_set(action_set: str, game: str = GAME) -> tuple[str, ...]:
@@ -44,11 +42,11 @@ class EnvConfig:
     max_pool_frames: bool = True
     max_episode_steps: int = 4500
     observation_size: int = 84
-    hud_crop_top: int = DEFAULT_HUD_CROP_TOP
+    hud_crop_top: int = -1
     obs_resize_algorithm: str = DEFAULT_OBS_RESIZE_ALGORITHM
     use_retro_reward: bool = False
     clip_rewards: bool = False
-    reward_mode: str = "baseline"
+    reward_mode: str = "auto"
     progress_reward_cap: float = 30.0
     progress_reward_scale: float = 1.0
     terminal_reward: float = 50.0
@@ -59,31 +57,38 @@ class EnvConfig:
     score_progress_clipped: bool = False
     no_progress_timeout_steps: int = 0
     no_progress_min_delta: int = 0
-    completion_x_threshold: int = 0
-    terminate_on_life_loss: bool = True
+    completion_x_threshold: int = -1
+    terminate_on_life_loss: bool | None = None
     terminate_on_level_change: bool = False
     terminate_on_completion: bool = False
-    action_set: str = "simple"
+    action_set: str = "auto"
     env_threads: int = 0
 
 
 def resolve_env_config(config: EnvConfig) -> EnvConfig:
+    if not config.game:
+        raise ValueError("game is required; pass --game or set RETRO_GAME")
     target = target_for_game(config.game)
     updates: dict[str, Any] = {}
-    if config.state == DEFAULT_STATE and target.default_state and config.game != GAME:
+    if not config.state and target.default_state:
         updates["state"] = target.default_state
-    if config.action_set not in target.action_sets and not target.action_sets:
+    if config.action_set == "auto":
         updates["action_set"] = target.default_action_set
-    if config.reward_mode == "baseline" and target.default_reward_mode != "baseline":
+    elif config.action_set not in target.action_sets and not target.action_sets:
+        updates["action_set"] = target.default_action_set
+    if config.reward_mode == "auto":
         updates["reward_mode"] = target.default_reward_mode
-    if config.hud_crop_top == DEFAULT_HUD_CROP_TOP and config.game != GAME:
+    if config.hud_crop_top < 0:
         updates["hud_crop_top"] = target.default_hud_crop_top
-    if (
-        config.completion_x_threshold == DEFAULT_COMPLETION_X_THRESHOLD
-        and config.game != GAME
-    ):
+    if config.completion_x_threshold < 0:
         updates["completion_x_threshold"] = target.default_completion_x_threshold
+    if config.terminate_on_life_loss is None:
+        updates["terminate_on_life_loss"] = target.default_terminate_on_life_loss
     return replace(config, **updates) if updates else config
+
+
+def retro_make_kwargs(config: EnvConfig) -> dict[str, Any]:
+    return {"state": config.state} if config.state else {}
 
 
 class DiscreteRetroActions(gym.ActionWrapper):
@@ -122,10 +127,6 @@ class VecDiscreteRetroActions(VecEnvWrapper):
 
     def step_wait(self):
         return self.venv.step_wait()
-
-
-DiscreteMarioActions = DiscreteRetroActions
-VecDiscreteMarioActions = VecDiscreteRetroActions
 
 
 class VecRetroProgressInfo(VecEnvWrapper):
@@ -210,9 +211,6 @@ class VecRetroProgressInfo(VecEnvWrapper):
         return obs, shaped_rewards, dones, infos
 
 
-VecMarioProgressInfo = VecRetroProgressInfo
-
-
 class FrameSkip(gym.Wrapper):
     """Repeat one action for several emulator frames and sum reward."""
 
@@ -278,10 +276,7 @@ class RetroProgressInfo(gym.Wrapper):
         return obs, progress.reward, terminated, truncated, info
 
 
-MarioProgressInfo = RetroProgressInfo
-
-
-class MarioPreprocess(gym.ObservationWrapper):
+class RetroPreprocess(gym.ObservationWrapper):
     """Crop optional HUD rows, then convert RGB frames to grayscale observations."""
 
     def __init__(self, env: gym.Env, size: int = 84, hud_crop_top: int = 0):
@@ -308,18 +303,17 @@ class MarioPreprocess(gym.ObservationWrapper):
         return resized[..., None]
 
 
-def make_mario_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
+def make_retro_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
     config = resolve_env_config(config or EnvConfig())
-    env = retro.make(config.game, state=config.state, render_mode="rgb_array")
-    return wrap_mario_env(env, config=config, seed=seed)
+    env = retro.make(config.game, render_mode="rgb_array", **retro_make_kwargs(config))
+    return wrap_retro_env(env, config=config, seed=seed)
 
 
-def make_fast_mario_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
+def make_fast_retro_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
     config = resolve_env_config(config or EnvConfig())
     target = target_for_game(config.game)
     env = retro.make(
         config.game,
-        state=config.state,
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),
         obs_crop=(config.hud_crop_top, 0, 0, 0) if config.hud_crop_top else None,
@@ -328,6 +322,7 @@ def make_fast_mario_env(config: EnvConfig | None = None, seed: int | None = None
         frame_skip=config.frame_skip,
         frame_stack=4,
         maxpool_last_two=config.max_pool_frames,
+        **retro_make_kwargs(config),
     )
     if target.uses_discrete_actions(config.action_set):
         env = DiscreteRetroActions(env, config=config)
@@ -341,20 +336,20 @@ def make_fast_mario_env(config: EnvConfig | None = None, seed: int | None = None
     return env
 
 
-def make_rendered_mario_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
+def make_rendered_retro_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
     config = resolve_env_config(config or EnvConfig())
-    env = retro.make(config.game, state=config.state, render_mode="human")
-    return wrap_mario_env(env, config=config, seed=seed)
+    env = retro.make(config.game, render_mode="human", **retro_make_kwargs(config))
+    return wrap_retro_env(env, config=config, seed=seed)
 
 
-def wrap_mario_env(env: gym.Env, config: EnvConfig, seed: int | None = None) -> gym.Env:
+def wrap_retro_env(env: gym.Env, config: EnvConfig, seed: int | None = None) -> gym.Env:
     config = resolve_env_config(config)
     target = target_for_game(config.game)
     if target.uses_discrete_actions(config.action_set):
         env = DiscreteRetroActions(env, config=config)
     env = FrameSkip(env, config.frame_skip, max_pool=config.max_pool_frames)
     env = RetroProgressInfo(env, config=config)
-    env = MarioPreprocess(env, config.observation_size, hud_crop_top=config.hud_crop_top)
+    env = RetroPreprocess(env, config.observation_size, hud_crop_top=config.hud_crop_top)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=config.max_episode_steps)
     if config.clip_rewards:
         env = ClipRewardEnv(env)
@@ -369,11 +364,43 @@ def make_env_fn(rank: int, seed: int, config: EnvConfig) -> Callable[[], gym.Env
         env_config = resolve_env_config(config)
         if config.states:
             env_config = replace(config, state=config.states[rank % len(config.states)])
-        env = make_fast_mario_env(config=env_config, seed=seed + rank)
+        env = make_fast_retro_env(config=env_config, seed=seed + rank)
         env.reset(seed=seed + rank)
         return env
 
     return _init
+
+
+def needs_vec_transpose_image(observation_space: gym.Space) -> bool:
+    """Return whether SB3 needs VecTransposeImage to receive channel-first images."""
+
+    shape = getattr(observation_space, "shape", None)
+    if not isinstance(observation_space, gym.spaces.Box) or shape is None or len(shape) != 3:
+        raise ValueError(
+            "expected image observation_space with shape (H, W, C) or (C, H, W), "
+            f"got {observation_space!r}",
+        )
+
+    channels_first = (
+        int(shape[0]) in FRAME_STACK_CHANNELS and int(shape[-1]) not in FRAME_STACK_CHANNELS
+    )
+    channels_last = (
+        int(shape[-1]) in FRAME_STACK_CHANNELS and int(shape[0]) not in FRAME_STACK_CHANNELS
+    )
+    if channels_first:
+        return False
+    if channels_last:
+        return True
+    raise ValueError(
+        "could not infer observation channel order from shape "
+        f"{tuple(int(dim) for dim in shape)}; expected channel count in first or last axis",
+    )
+
+
+def maybe_transpose_vec_image(vec_env):
+    if needs_vec_transpose_image(vec_env.observation_space):
+        return VecTransposeImage(vec_env)
+    return vec_env
 
 
 def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str = "fork"):
@@ -388,7 +415,7 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
     vec_env = StableRetroNativeVecEnv(
         config.game,
         num_envs=n_envs,
-        state=config.state,
+        state=config.state or None,
         num_threads=num_threads,
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),
@@ -406,7 +433,7 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
         vec_env = VecDiscreteRetroActions(vec_env, config=config)
     vec_env = VecRetroProgressInfo(vec_env, config=config)
     vec_env = VecMonitor(vec_env)
-    return VecTransposeImage(vec_env)
+    return maybe_transpose_vec_image(vec_env)
 
 
 def make_training_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: str = "fork"):
@@ -418,16 +445,20 @@ def make_eval_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: s
 
 
 def make_rendered_replay_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
-    return make_mario_env(config=config, seed=seed)
+    return make_retro_env(config=config, seed=seed)
 
 
 def assert_rom_imported(game: str = GAME) -> str:
+    if not game:
+        raise ValueError("game is required; pass --game or set RETRO_GAME")
     try:
         return retro.data.get_romfile_path(game)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"{game} is not imported. Run: uv run python scripts/import_roms.py ~/Desktop/roms",
         ) from exc
+
+
 
 
 def default_run_dir(run_name: str, runs_dir: str = "runs") -> str:

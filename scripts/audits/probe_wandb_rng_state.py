@@ -22,7 +22,7 @@ def main() -> None:
     import wandb
 
     run = wandb.init(
-        project="SuperMarioBros-NES",
+        project="StableRetro-PPO",
         name="rng-probe-offline",
         mode="offline",
         sync_tensorboard=True,
@@ -32,7 +32,7 @@ def main() -> None:
 
     set_random_seed(23)
     run = wandb.init(
-        project="SuperMarioBros-NES",
+        project="StableRetro-PPO",
         name="rng-probe-disabled",
         mode="disabled",
         sync_tensorboard=True,

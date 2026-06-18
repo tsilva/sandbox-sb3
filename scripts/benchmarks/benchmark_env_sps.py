@@ -10,46 +10,47 @@ import numpy as np
 import stable_retro as retro
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from mario_ppo.env import (
+from stable_retro_ppo.env import (
     GAME,
-    DiscreteMarioActions,
+    DiscreteRetroActions,
     EnvConfig,
     FrameSkip,
-    MarioProgressInfo,
+    RetroProgressInfo,
     action_names_for_set,
     assert_rom_imported,
-    make_fast_mario_env,
-    make_mario_env,
+    make_fast_retro_env,
+    make_retro_env,
+    resolve_env_config,
+    retro_make_kwargs,
 )
 
 
-def make_raw_env(seed: int) -> gym.Env:
-    env = retro.make(GAME, state="Level1-1", render_mode="rgb_array")
+def make_raw_env(seed: int, config: EnvConfig) -> gym.Env:
+    env = retro.make(config.game, render_mode="rgb_array", **retro_make_kwargs(config))
     env.reset(seed=seed)
     return env
 
 
-def make_python_preprocessed_env(seed: int) -> gym.Env:
-    config = EnvConfig(max_episode_steps=4500, terminate_on_life_loss=False)
-    env = make_mario_env(config=config, seed=seed)
+def make_python_preprocessed_env(seed: int, config: EnvConfig) -> gym.Env:
+    env = make_retro_env(config=config, seed=seed)
     env.reset(seed=seed)
     return env
 
 
-def make_retro_preprocessed_env(seed: int, resize_algorithm: str) -> gym.Env:
-    config = EnvConfig(max_episode_steps=4500, terminate_on_life_loss=False)
+def make_retro_preprocessed_env(seed: int, config: EnvConfig, resize_algorithm: str) -> gym.Env:
     env = retro.make(
         config.game,
-        state=config.state,
         render_mode="rgb_array",
         obs_resize=(config.observation_size, config.observation_size),
         obs_crop=(config.hud_crop_top, 0, 0, 0) if config.hud_crop_top else None,
         obs_grayscale=True,
         obs_resize_algorithm=resize_algorithm,
+        **retro_make_kwargs(config),
     )
-    env = DiscreteMarioActions(env, config=config)
+    if config.action_set != "native":
+        env = DiscreteRetroActions(env, config=config)
     env = FrameSkip(env, config.frame_skip)
-    env = MarioProgressInfo(env, config=config)
+    env = RetroProgressInfo(env, config=config)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=config.max_episode_steps)
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
@@ -57,21 +58,20 @@ def make_retro_preprocessed_env(seed: int, resize_algorithm: str) -> gym.Env:
     return env
 
 
-def make_fast_preprocessed_env(seed: int) -> gym.Env:
-    config = EnvConfig(max_episode_steps=4500, terminate_on_life_loss=False)
-    env = make_fast_mario_env(config=config, seed=seed)
+def make_fast_preprocessed_env(seed: int, config: EnvConfig) -> gym.Env:
+    env = make_fast_retro_env(config=config, seed=seed)
     env.reset(seed=seed)
     return env
 
 
-def make_env(mode: str, seed: int, resize_algorithm: str) -> gym.Env:
+def make_env(mode: str, seed: int, config: EnvConfig, resize_algorithm: str) -> gym.Env:
     if mode == "python":
-        return make_python_preprocessed_env(seed)
+        return make_python_preprocessed_env(seed, config)
     if mode == "retro":
-        return make_retro_preprocessed_env(seed, resize_algorithm)
+        return make_retro_preprocessed_env(seed, config, resize_algorithm)
     if mode == "fast":
-        return make_fast_preprocessed_env(seed)
-    return make_raw_env(seed)
+        return make_fast_preprocessed_env(seed, config)
+    return make_raw_env(seed, config)
 
 
 def sample_action(space: gym.Space, rng: np.random.Generator):
@@ -87,9 +87,10 @@ def bench_single(
     steps: int,
     warmup: int,
     seed: int,
+    config: EnvConfig,
     resize_algorithm: str,
 ) -> dict[str, object]:
-    env = make_env(mode, seed, resize_algorithm)
+    env = make_env(mode, seed, config, resize_algorithm)
     rng = np.random.default_rng(seed)
     action_space = env.action_space
     obs, _ = env.reset(seed=seed)
@@ -119,10 +120,10 @@ def bench_single(
     }
 
 
-def make_vec_env_fn(mode: str, rank: int, seed: int):
+def make_vec_env_fn(mode: str, rank: int, seed: int, config: EnvConfig):
     def _init() -> gym.Env:
         env_seed = seed + rank
-        return make_env(mode, env_seed, make_vec_env_fn.resize_algorithm)
+        return make_env(mode, env_seed, config, make_vec_env_fn.resize_algorithm)
 
     return _init
 
@@ -136,6 +137,7 @@ def bench_vector(
     steps_per_env: int,
     warmup: int,
     seed: int,
+    config: EnvConfig,
     resize_algorithm: str,
 ) -> dict[str, object]:
     make_vec_env_fn.resize_algorithm = resize_algorithm
@@ -148,14 +150,14 @@ def bench_vector(
     else:
         vec_env_cls = SubprocVecEnv
     vec_env = vec_env_cls(
-        [make_vec_env_fn(mode, rank, seed) for rank in range(envs)],
+        [make_vec_env_fn(mode, rank, seed, config) for rank in range(envs)],
         start_method="fork",
     )
     rng = np.random.default_rng(seed)
     obs = vec_env.reset()
 
-    if mode in {"python", "retro", "fast"}:
-        action_count = len(action_names_for_set("simple"))
+    if mode in {"python", "retro", "fast"} and config.action_set != "native":
+        action_count = len(action_names_for_set(config.action_set, game=config.game))
 
         def make_actions():
             return rng.integers(0, action_count, size=(envs,))
@@ -190,7 +192,11 @@ def bench_vector(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark SuperMarioBros-Nes-v0 env steps/sec.")
+    parser = argparse.ArgumentParser(description="Benchmark Stable Retro env steps/sec.")
+    parser.add_argument("--game", default=GAME)
+    parser.add_argument("--state", default="")
+    parser.add_argument("--hud-crop-top", type=int, default=-1)
+    parser.add_argument("--action-set", default="auto")
     parser.add_argument("--mode", choices=["raw", "python", "retro", "fast"], default="python")
     parser.add_argument("--envs", type=int, default=1)
     parser.add_argument("--steps", type=int, default=20_000)
@@ -203,13 +209,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    assert_rom_imported()
+    assert_rom_imported(args.game)
+    config = resolve_env_config(
+        EnvConfig(
+            game=args.game,
+            state=args.state,
+            hud_crop_top=args.hud_crop_top,
+            action_set=args.action_set,
+            max_episode_steps=4500,
+            terminate_on_life_loss=False,
+        )
+    )
     if args.envs == 1:
         result = bench_single(
             args.mode,
             args.steps,
             args.warmup,
             args.seed,
+            config,
             args.retro_resize_algorithm,
         )
     else:
@@ -219,14 +236,15 @@ def main() -> None:
             args.steps,
             args.warmup,
             args.seed,
+            config,
             args.retro_resize_algorithm,
         )
     result["package_version"] = getattr(retro, "__version__", "").strip()
     if args.mode == "retro":
         result["retro_resize_algorithm"] = args.retro_resize_algorithm
     result["config"] = {
-        "game": GAME,
-        "benchmark": asdict(EnvConfig(max_episode_steps=4500, terminate_on_life_loss=False)),
+        "game": config.game,
+        "benchmark": asdict(config),
     }
     print(json.dumps(result, indent=2, sort_keys=True))
 

@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from mario_ppo.env import EnvConfig
-from mario_ppo.wandb_utils import load_wandb_env
+from stable_retro_ppo.env import EnvConfig
+from stable_retro_ppo.wandb_utils import load_wandb_env
 
 
 def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
@@ -82,7 +82,7 @@ def wandb_artifacts_enabled(wandb_run, args: argparse.Namespace) -> bool:
 
 
 def sanitize_artifact_name(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "mario-ppo"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "stable-retro-ppo"
 
 
 def checkpoint_step(path: Path) -> int | None:
@@ -113,10 +113,25 @@ def parse_s3_uri(uri: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
+def artifact_rom_prefix(game: str) -> str:
+    return sanitize_artifact_name(game)
+
+
+def artifact_storage_prefix(base_prefix: str, game: str) -> str:
+    prefix = base_prefix.rstrip("/")
+    rom_prefix = artifact_rom_prefix(game)
+    if not prefix:
+        return rom_prefix
+    if prefix == rom_prefix or prefix.endswith(f"/{rom_prefix}"):
+        return prefix
+    return f"{prefix}/{rom_prefix}"
+
+
 def build_s3_artifact_uri(base_uri: str, args: argparse.Namespace, model_path: Path, kind: str) -> str:
     bucket, prefix = parse_s3_uri(base_uri)
+    prefix = artifact_storage_prefix(prefix, args.game)
     key_parts = [
-        prefix.rstrip("/"),
+        prefix,
         sanitize_artifact_name(args.run_name),
         kind,
         model_path.name,

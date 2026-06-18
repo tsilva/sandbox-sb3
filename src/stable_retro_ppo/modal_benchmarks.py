@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from mario_ppo.modal_core import (
+from stable_retro_ppo.modal_core import (
     PROJECT_ROOT,
     VOLUME_NAME,
     VOLUME_ROOT,
@@ -25,6 +25,9 @@ from mario_ppo.modal_core import (
     memory=32768,
 )
 def benchmark_env_remote(
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     n_envs: int = 16,
     vec_steps: int = 2_000,
     warmup: int = 200,
@@ -32,22 +35,24 @@ def benchmark_env_remote(
 ) -> dict[str, object]:
     import numpy as np
     import stable_retro as retro
-    from stable_baselines3.common.vec_env import VecTransposeImage
+    from stable_retro_ppo.env import maybe_transpose_vec_image
 
     os.environ["STABLE_RETRO_DISABLE_AUDIO"] = "1"
     ensure_remote_roms("benchmarking")
 
-    def make_mario_env():
+    def make_retro_env():
+        kwargs = {"state": state} if state else {}
         return retro.make(
-            "SuperMarioBros-Nes-v0",
+            game,
             render_mode="rgb_array",
             obs_resize=(84, 84),
-            obs_crop=(32, 0, 0, 0),
+            obs_crop=(hud_crop_top, 0, 0, 0) if hud_crop_top else None,
             obs_resize_algorithm="area",
             obs_grayscale=True,
             frame_skip=4,
             frame_stack=4,
             maxpool_last_two=True,
+            **kwargs,
         )
 
     try:
@@ -61,10 +66,10 @@ def benchmark_env_remote(
         }
 
     env = StableRetroSubprocVecEnv(
-        [make_mario_env for _ in range(n_envs)], start_method=start_method
+        [make_retro_env for _ in range(n_envs)], start_method=start_method
     )
     hwc_obs = env.reset().copy()
-    action = np.zeros((n_envs, 9), dtype=np.int8)
+    action = np.zeros((n_envs, *env.action_space.shape), dtype=env.action_space.dtype)
     for _ in range(warmup):
         env.step(action)
     start = time.perf_counter()
@@ -73,8 +78,8 @@ def benchmark_env_remote(
     elapsed = time.perf_counter() - start
     env.close()
 
-    transposed = VecTransposeImage(
-        StableRetroSubprocVecEnv([make_mario_env for _ in range(n_envs)], start_method=start_method)
+    transposed = maybe_transpose_vec_image(
+        StableRetroSubprocVecEnv([make_retro_env for _ in range(n_envs)], start_method=start_method)
     )
     chw_obs = transposed.reset().copy()
     transposed.close()
@@ -107,6 +112,9 @@ def benchmark_env_remote(
 )
 def benchmark_env_sweep_remote(
     env_counts: list[int],
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     vec_steps: int = 3_000,
     warmup: int = 100,
     start_method: str = "spawn",
@@ -119,27 +127,29 @@ def benchmark_env_sweep_remote(
 
     from stable_retro import StableRetroSubprocVecEnv
 
-    def make_mario_env():
+    def make_retro_env():
+        kwargs = {"state": state} if state else {}
         return retro.make(
-            "SuperMarioBros-Nes-v0",
+            game,
             render_mode="rgb_array",
             obs_resize=(84, 84),
-            obs_crop=(32, 0, 0, 0),
+            obs_crop=(hud_crop_top, 0, 0, 0) if hud_crop_top else None,
             obs_resize_algorithm="area",
             obs_grayscale=True,
             frame_skip=4,
             frame_stack=4,
             maxpool_last_two=True,
+            **kwargs,
         )
 
     results = []
     for n_envs in env_counts:
         env = StableRetroSubprocVecEnv(
-            [make_mario_env for _ in range(n_envs)], start_method=start_method
+            [make_retro_env for _ in range(n_envs)], start_method=start_method
         )
         try:
             hwc_obs = env.reset().copy()
-            action = np.zeros((n_envs, 9), dtype=np.int8)
+            action = np.zeros((n_envs, *env.action_space.shape), dtype=env.action_space.dtype)
             for _ in range(warmup):
                 env.step(action)
             start = time.perf_counter()
@@ -189,6 +199,9 @@ def benchmark_env_sweep_remote(
     memory=32768,
 )
 def benchmark_env_diagnostics_remote(
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     single_steps: int = 3_000,
     vec_steps: int = 2_000,
     warmup: int = 100,
@@ -209,7 +222,13 @@ def benchmark_env_diagnostics_remote(
         vector_envs,
         "--start-method",
         start_method,
+        "--game",
+        game,
+        "--hud-crop-top",
+        str(hud_crop_top),
     ]
+    if state:
+        cmd.extend(["--state", state])
     env = os.environ.copy()
     env["STABLE_RETRO_DISABLE_AUDIO"] = "1"
     completed = subprocess.run(
@@ -246,6 +265,9 @@ def upload_roms(rom_dir: str = "~/Desktop/roms") -> None:
 
 @app.local_entrypoint()
 def benchmark_env(
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     n_envs: int = 16,
     vec_steps: int = 2_000,
     warmup: int = 200,
@@ -255,6 +277,9 @@ def benchmark_env(
 ) -> None:
     result = benchmark_env_remote.with_options(cpu=cpu, memory=memory).remote(
         n_envs=n_envs,
+        game=game,
+        state=state,
+        hud_crop_top=hud_crop_top,
         vec_steps=vec_steps,
         warmup=warmup,
         start_method=start_method,
@@ -264,6 +289,9 @@ def benchmark_env(
 
 @app.local_entrypoint()
 def benchmark_env_sweep(
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     env_counts: str = "1,2,4,8,16,32",
     vec_steps: int = 3_000,
     warmup: int = 100,
@@ -274,6 +302,9 @@ def benchmark_env_sweep(
     parsed_env_counts = [int(value.strip()) for value in env_counts.split(",") if value.strip()]
     result = benchmark_env_sweep_remote.with_options(cpu=cpu, memory=memory).remote(
         env_counts=parsed_env_counts,
+        game=game,
+        state=state,
+        hud_crop_top=hud_crop_top,
         vec_steps=vec_steps,
         warmup=warmup,
         start_method=start_method,
@@ -283,6 +314,9 @@ def benchmark_env_sweep(
 
 @app.local_entrypoint()
 def benchmark_env_diagnostics(
+    game: str,
+    state: str = "",
+    hud_crop_top: int = 0,
     single_steps: int = 3_000,
     vec_steps: int = 2_000,
     warmup: int = 100,
@@ -293,6 +327,9 @@ def benchmark_env_diagnostics(
 ) -> None:
     result = benchmark_env_diagnostics_remote.with_options(cpu=cpu, memory=memory).remote(
         single_steps=single_steps,
+        game=game,
+        state=state,
+        hud_crop_top=hud_crop_top,
         vec_steps=vec_steps,
         warmup=warmup,
         vector_envs=vector_envs,

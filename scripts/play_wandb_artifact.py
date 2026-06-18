@@ -5,15 +5,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from mario_ppo.wandb_artifacts import (
+from stable_retro_ppo.env import EnvConfig
+from stable_retro_ppo.wandb_artifacts import (
     artifact_download_dir,
     download_model_artifact,
     model_artifact_ref,
 )
-from mario_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
+from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
 
 
 def build_parser() -> argparse.ArgumentParser:
+    defaults = EnvConfig()
     parser = argparse.ArgumentParser(
         description="Download a W&B model artifact and play it locally"
     )
@@ -26,8 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", default="latest")
     parser.add_argument("--root", default="runs/wandb_artifacts")
     parser.add_argument("--episodes", type=int, default=3)
-    parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
-    parser.add_argument("--state", default="Level1-1")
+    parser.add_argument("--game", default=defaults.game)
+    parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-steps", type=int, default=1200)
@@ -38,8 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument(
         "--reward-mode",
-        choices=["baseline", "bounded", "additive", "score", "native"],
-        default="baseline",
+        choices=["auto", "baseline", "bounded", "additive", "score", "native"],
+        default=defaults.reward_mode,
     )
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
@@ -51,11 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-progress-clipped", action="store_true")
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--completion-x-threshold", type=int, default=0)
-    parser.add_argument("--no-terminate-on-life-loss", action="store_true")
+    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.terminate_on_life_loss,
+    )
     parser.add_argument("--terminate-on-level-change", action="store_true")
     parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--action-set", choices=["simple", "right", "native"], default="simple")
+    parser.add_argument("--action-set", default=defaults.action_set)
     parser.add_argument("--download-only", action="store_true")
     return parser
 
@@ -77,7 +83,7 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "mario_ppo.play",
+        "stable_retro_ppo.play",
         "--model",
         str(model_path),
         "--episodes",
@@ -129,7 +135,9 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
         cmd.append("--no-max-pool-frames")
     if args.random_seeds:
         cmd.append("--random-seeds")
-    if args.no_terminate_on_life_loss:
+    if args.terminate_on_life_loss is True:
+        cmd.append("--terminate-on-life-loss")
+    elif args.terminate_on_life_loss is False:
         cmd.append("--no-terminate-on-life-loss")
     if args.terminate_on_level_change:
         cmd.append("--terminate-on-level-change")

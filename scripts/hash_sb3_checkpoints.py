@@ -27,7 +27,7 @@ def main() -> None:
 
     for run_dir in sorted(Path("runs").glob(args.runs_glob)):
         print("RUN", run_dir.name)
-        checkpoints = sorted((run_dir / "checkpoints").glob("ppo_mario_*_steps.zip"))
+        checkpoints = sorted((run_dir / "checkpoints").glob("ppo_*_steps.zip"))
         print("checkpoint_count", len(checkpoints))
         for checkpoint in checkpoints[: args.limit]:
             print(checkpoint.name, policy_hash(checkpoint))

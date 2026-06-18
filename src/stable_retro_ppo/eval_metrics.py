@@ -7,8 +7,8 @@ from typing import Any
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
-from mario_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
-from mario_ppo.video import replay_actions_for_video, write_video
+from stable_retro_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
+from stable_retro_ppo.video import replay_actions_for_video, write_video
 
 
 def is_level_complete(info: dict[str, Any], max_x_pos: int, completion_x_threshold: int) -> bool:
@@ -151,7 +151,7 @@ def run_eval_episode(
     }
 
 
-class MarioEvalCallback(BaseCallback):
+class RetroEvalCallback(BaseCallback):
     def __init__(
         self,
         config: EnvConfig,
@@ -285,7 +285,7 @@ class MarioEvalCallback(BaseCallback):
             self.log_wandb(metrics, death_x_positions, video_path)
 
         print(
-            "Mario eval "
+            "Retro eval "
             f"steps={self.num_timesteps} "
             f"reward_mean={metrics['reward_mean']:.2f} "
             f"max_x_mean={metrics['max_x_mean']:.2f} "

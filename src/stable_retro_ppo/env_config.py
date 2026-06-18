@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from mario_ppo.env import EnvConfig
+from stable_retro_ppo.env import EnvConfig
 
 
 def parse_states(value: str) -> tuple[str, ...]:
@@ -44,7 +44,7 @@ def env_config_from_args(
         "no_progress_timeout_steps": value("no_progress_timeout_steps"),
         "no_progress_min_delta": value("no_progress_min_delta"),
         "completion_x_threshold": value("completion_x_threshold"),
-        "terminate_on_life_loss": not value("no_terminate_on_life_loss", False),
+        "terminate_on_life_loss": value("terminate_on_life_loss"),
         "terminate_on_level_change": value("terminate_on_level_change"),
         "terminate_on_completion": value("terminate_on_completion"),
         "action_set": value("action_set"),
