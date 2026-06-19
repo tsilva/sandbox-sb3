@@ -264,6 +264,23 @@ def upload_roms(rom_dir: str = "~/Desktop/roms") -> None:
 
 
 @app.local_entrypoint()
+def upload_rom_file(rom_file: str, remote_name: str = "") -> None:
+    local_rom_file = Path(rom_file).expanduser()
+    if not local_rom_file.is_file():
+        raise FileNotFoundError(local_rom_file)
+    if local_rom_file.suffix.lower() not in {".nes", ".zip"}:
+        raise ValueError(f"Expected a .nes or .zip file, got {local_rom_file}")
+
+    target_name = remote_name or local_rom_file.name
+    if "/" in target_name or target_name in {"", ".", ".."}:
+        raise ValueError(f"Invalid remote ROM name: {target_name}")
+
+    with volume.batch_upload(force=True) as batch:
+        batch.put_file(local_rom_file, f"/roms/{target_name}")
+    print(f"Uploaded 1 ROM file to modal volume {VOLUME_NAME}:/roms/{target_name}")
+
+
+@app.local_entrypoint()
 def benchmark_env(
     game: str,
     state: str = "",

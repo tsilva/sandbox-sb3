@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any
 
 import cv2
@@ -14,16 +16,55 @@ def write_video(frames: list[np.ndarray], output: Path, fps: float, scale: int) 
     first_frame = frames[0]
     height, width = first_frame.shape[:2]
     out_size = (width * scale, height * scale)
-    writer = cv2.VideoWriter(str(output), cv2.VideoWriter_fourcc(*"mp4v"), fps, out_size)
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for {output}")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required to write browser-compatible MP4 video")
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{out_size[0]}x{out_size[1]}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "high",
+        "-level",
+        "4.0",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
     try:
         for frame in frames:
             if scale != 1:
                 frame = cv2.resize(frame, out_size, interpolation=cv2.INTER_NEAREST)
-            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            process.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
     finally:
-        writer.release()
+        process.stdin.close()
+    _, stderr = process.communicate()
+    if process.returncode != 0:
+        message = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg failed to write {output}: {message}")
 
 
 def replay_actions_for_video(env, actions: list[Any], seed: int) -> list[np.ndarray]:

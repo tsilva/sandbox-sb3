@@ -74,7 +74,13 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
 def cmd_launch(args: argparse.Namespace) -> int:
     repo_root = repo_root_from_args(args)
-    summary = launch_summary(args.manifest, args.output, repo_root, args.instances)
+    summary = launch_summary(
+        args.manifest,
+        args.output,
+        repo_root,
+        args.instances,
+        detach_run=args.detach_run,
+    )
     print(f"task: {summary.task_path}")
     print(f"cluster: {summary.cluster}")
     print(f"wandb_group_prefix: {summary.wandb_group_prefix}")
@@ -191,7 +197,7 @@ def cmd_repro_from_wandb(args: argparse.Namespace) -> int:
     task_path = write_rendered_task(manifest, instance_config, repo_root, args.output)
     cluster = str(manifest.get("cluster", manifest["name"]))
     summary = LaunchSummary(
-        command=build_launch_command(cluster, task_path),
+        command=build_launch_command(cluster, task_path, detach_run=args.detach_run),
         task_path=task_path,
         cluster=cluster,
         wandb_group_prefix=str(manifest.get("wandb_group_prefix", manifest["name"])),
@@ -236,6 +242,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rendered SkyPilot YAML path.",
     )
     launch.add_argument("--execute", action="store_true", help="Actually run sky launch")
+    launch.add_argument(
+        "--detach-run",
+        action="store_true",
+        help="Submit the SkyPilot job and return without streaming remote logs.",
+    )
     launch.add_argument(
         "--sparse",
         action=argparse.BooleanOptionalAction,
@@ -290,6 +301,11 @@ def build_parser() -> argparse.ArgumentParser:
     repro.add_argument("--manifest-output", type=Path, help="Optional generated manifest JSON path")
     repro.add_argument("--ensure-api", action="store_true", help="Select and login to a healthy API endpoint")
     repro.add_argument("--execute", action="store_true", help="Actually run sky launch")
+    repro.add_argument(
+        "--detach-run",
+        action="store_true",
+        help="Submit the SkyPilot job and return without streaming remote logs.",
+    )
     repro.add_argument(
         "--sparse",
         action=argparse.BooleanOptionalAction,

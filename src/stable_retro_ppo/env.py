@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import os
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace
@@ -27,6 +28,14 @@ DEFAULT_OBS_RESIZE_ALGORITHM = "area"
 DEFAULT_HUD_CROP_TOP = GenericRetroTarget.default_hud_crop_top
 DEFAULT_COMPLETION_X_THRESHOLD = GenericRetroTarget.default_completion_x_threshold
 FRAME_STACK_CHANNELS = {1, 3, 4}
+
+
+def native_vec_env_supports_life_loss() -> bool:
+    try:
+        source = inspect.getsource(StableRetroNativeVecEnv.__init__)
+    except (OSError, TypeError):
+        return False
+    return "terminate_on_life_loss" in source and "life_variable" in source
 
 
 def action_names_for_set(action_set: str, game: str = GAME) -> tuple[str, ...]:
@@ -411,27 +420,42 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
             "StableRetroNativeVecEnv supports one homogeneous state per vector env; "
             "use --state instead of --states for native rollouts.",
         )
-    num_threads = config.env_threads if config.env_threads > 0 else min(max(n_envs, 1), 16)
-    vec_env = StableRetroNativeVecEnv(
-        config.game,
-        num_envs=n_envs,
-        state=config.state or None,
-        num_threads=num_threads,
-        render_mode="rgb_array",
-        obs_resize=(config.observation_size, config.observation_size),
-        obs_crop=(config.hud_crop_top, 0, 0, 0) if config.hud_crop_top else None,
-        obs_grayscale=True,
-        obs_resize_algorithm=config.obs_resize_algorithm,
-        frame_skip=config.frame_skip,
-        frame_stack=4,
-        maxpool_last_two=config.max_pool_frames,
-        copy_observations=False,
-    )
-    vec_env.seed(seed)
     target = target_for_game(config.game)
+    num_threads = config.env_threads if config.env_threads > 0 else min(max(n_envs, 1), 16)
+    native_life_variable = target.native_life_variable
+    native_terminates_life_loss = bool(
+        config.terminate_on_life_loss and native_life_variable
+    )
+    native_life_loss_supported = (
+        native_terminates_life_loss and native_vec_env_supports_life_loss()
+    )
+    native_kwargs: dict[str, Any] = {
+        "num_envs": n_envs,
+        "state": config.state or None,
+        "num_threads": num_threads,
+        "render_mode": "rgb_array",
+        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_crop": (config.hud_crop_top, 0, 0, 0) if config.hud_crop_top else None,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": config.obs_resize_algorithm,
+        "frame_skip": config.frame_skip,
+        "frame_stack": 4,
+        "maxpool_last_two": config.max_pool_frames,
+        "copy_observations": False,
+    }
+    if native_life_loss_supported:
+        native_kwargs["terminate_on_life_loss"] = True
+        native_kwargs["life_variable"] = native_life_variable
+    vec_env = StableRetroNativeVecEnv(config.game, **native_kwargs)
+    vec_env.seed(seed)
     if target.uses_discrete_actions(config.action_set):
         vec_env = VecDiscreteRetroActions(vec_env, config=config)
-    vec_env = VecRetroProgressInfo(vec_env, config=config)
+    progress_config = (
+        replace(config, terminate_on_life_loss=False)
+        if native_life_loss_supported
+        else config
+    )
+    vec_env = VecRetroProgressInfo(vec_env, config=progress_config)
     vec_env = VecMonitor(vec_env)
     return maybe_transpose_vec_image(vec_env)
 

@@ -156,7 +156,7 @@ class SuperMarioBrosNesV0ProgressTracker(RetroProgressTracker):
             custom_done = True
             custom_terminal = True
 
-        died = False
+        died = bool(info.get("life_loss", False))
         if self.prev_lives is not None and lives is not None and int(lives) < self.prev_lives:
             died = True
             if config.terminate_on_life_loss:
@@ -281,6 +281,7 @@ class RetroTarget:
     default_action_set: ClassVar[str] = "native"
     default_reward_mode: ClassVar[str] = "native"
     default_terminate_on_life_loss: ClassVar[bool] = False
+    native_life_variable: ClassVar[str | None] = None
     action_library: ClassVar[dict[str, np.ndarray]] = {}
     action_sets: ClassVar[dict[str, tuple[str, ...]]] = {}
     tracker_cls: ClassVar[type[RetroProgressTracker]] = RetroProgressTracker
@@ -320,6 +321,7 @@ class SuperMarioBrosNesV0Target(RetroTarget):
     default_action_set = "simple"
     default_reward_mode = "baseline"
     default_terminate_on_life_loss = True
+    native_life_variable = "lives"
     tracker_cls = SuperMarioBrosNesV0ProgressTracker
 
     # stable-retro button order for NES:

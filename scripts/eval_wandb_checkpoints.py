@@ -106,7 +106,25 @@ def load_eval_history(path: Path) -> list[dict[str, Any]]:
 def append_eval_history(path: Path, metrics: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(metrics) + "\n")
+        file.write(json.dumps(json_safe(metrics)) + "\n")
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [json_safe(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        return {
+            "array_shape": list(value.shape),
+            "array_dtype": str(value.dtype),
+        }
+    return value
 
 
 def score(metrics: dict[str, Any]) -> tuple[float, int, float]:
@@ -123,6 +141,12 @@ def best_metrics(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     return max(rows, key=score)
 
 
+def eval_seed_for_checkpoint(args: argparse.Namespace, checkpoint_step: int) -> int:
+    if args.seed_offset_by_checkpoint_step:
+        return args.seed + checkpoint_step
+    return args.seed
+
+
 def evaluate_checkpoint(
     args: argparse.Namespace,
     model_path: Path,
@@ -131,6 +155,7 @@ def evaluate_checkpoint(
 ) -> tuple[dict[str, Any], Path | None]:
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
     config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
+    eval_seed = eval_seed_for_checkpoint(args, checkpoint_step)
     video_path = (
         Path(args.eval_dir) / args.run_name / "videos" / f"best_episode_{checkpoint_step}_steps.mp4"
         if args.record_best_video
@@ -140,7 +165,7 @@ def evaluate_checkpoint(
         model=model,
         config=config,
         episodes=args.episodes,
-        seed=args.seed + checkpoint_step,
+        seed=eval_seed,
         max_steps=args.max_steps,
         deterministic=args.deterministic,
         completion_x_threshold=config.completion_x_threshold,
@@ -153,6 +178,7 @@ def evaluate_checkpoint(
             "checkpoint_artifact": artifact_name,
             "model": str(model_path),
             "hud_crop_top": args.hud_crop_top,
+            "eval_seed": eval_seed,
         },
     )
     return metrics, video_path
@@ -293,6 +319,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
     parser.add_argument("--seed", type=int, default=10007)
+    parser.add_argument(
+        "--seed-offset-by-checkpoint-step",
+        action="store_true",
+        help=(
+            "Use the legacy eval seed schedule of --seed + checkpoint_step. "
+            "By default, all checkpoints use the same eval seed schedule for fair comparison."
+        ),
+    )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
     parser.add_argument("--action-set", default=defaults.action_set)

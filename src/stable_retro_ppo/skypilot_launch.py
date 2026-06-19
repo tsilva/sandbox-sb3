@@ -437,8 +437,10 @@ PY"""
     return "\n".join(yaml) + "\n"
 
 
-def build_launch_command(cluster: str, task_path: Path) -> list[str]:
+def build_launch_command(cluster: str, task_path: Path, *, detach_run: bool = False) -> list[str]:
     cmd = ["sky", "launch", "-c", cluster, "-y", str(task_path)]
+    if detach_run:
+        cmd.append("--detach-run")
     for key in ("AWS_REGION", "AWS_S3_ENDPOINT_URL", "CHECKPOINT_BUCKET_URI"):
         cmd.extend(["--env", key])
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "WANDB_API_KEY"):
@@ -558,13 +560,15 @@ def launch_summary(
     output_path: Path,
     repo_root: Path,
     instance_config_path: Path | None = None,
+    *,
+    detach_run: bool = False,
 ) -> LaunchSummary:
     manifest = load_manifest(manifest_path)
     instance_config = load_instance_config(repo_root, instance_config_path)
     task_path = write_rendered_task(manifest, instance_config, repo_root, output_path)
     cluster = str(manifest.get("cluster", manifest["name"]))
     return LaunchSummary(
-        command=build_launch_command(cluster, task_path),
+        command=build_launch_command(cluster, task_path, detach_run=detach_run),
         task_path=task_path,
         cluster=cluster,
         wandb_group_prefix=str(manifest.get("wandb_group_prefix", manifest["name"])),

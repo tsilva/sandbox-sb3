@@ -1,6 +1,6 @@
 # GPU Instances
 
-Last updated: 2026-06-18
+Last updated: 2026-06-19
 
 Use this file as the repo-local source of truth for known GPU instances, launch targets, benchmark-backed concurrency, and operational gotchas. Re-check live availability before launching, but do not rediscover these basics from scratch unless the facts here fail.
 
@@ -122,7 +122,23 @@ Benchmarked for the current near-best Mario PPO shape: `n_envs=16`, `n_steps=512
 | 5 children, `env_threads=2` | 5,878 | 51.9% | not recorded here | Lower contention but about 6% slower. |
 | 5 children, `env_threads=1` | 4,615 | 37.0% | not recorded here | Underfeeds rollout collection. |
 
-Default to 5 children with `env_threads=4` for screening queues. Use 3-4 children with `env_threads=4` when individual run latency, lower CPU contention, or easier debugging matters more than total aggregate throughput.
+Default to 5 children with `env_threads=4` for screening queues. Use 3-4
+children with `env_threads=4` when individual run latency, lower CPU
+contention, or easier debugging matters more than total aggregate throughput.
+Do not launch more than 5 children for this Mario PPO shape unless explicitly
+running a short concurrency benchmark. On 2026-06-19, a live 6-child B33
+reproduction used about 10 of 12 requested CPU cores and reached about 6.1k
+aggregate fps, which was not better than the recorded 5-child results; the
+extra child mainly increased CPU/env contention.
+
+2026-06-19 update: the B34 strict `100/100` confirmation shape
+(`n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, W&B artifact
+uploads enabled, checkpointing every 100k) OOMKilled with three concurrent
+children under the 48 GB Kubernetes memory request, while a 64 GB request was
+unschedulable. Two concurrent children completed cleanly. Until memory use is
+re-benchmarked or reduced, use two concurrent children for this exact
+confirmation/screening shape even though older short throughput benchmarks
+favored more children.
 
 ### Operational Notes
 
@@ -135,6 +151,20 @@ Default to 5 children with `env_threads=4` for screening queues. Use 3-4 childre
 
 ### Stable Retro Runtime Notes
 
+- On 2026-06-19, `stable-retro-turbo==1.0.0.post14` was validated for
+  native-vector life-loss termination on `SuperMarioBros-Nes-v0`: random-action
+  vector probes emitted one-slot `done`s with `life_loss=True`, `died=True`,
+  `terminal_observation`, and no wrapper-level `global_reset`. This resolves the
+  old first-life-loss vector reset concern for Mario when the repo uses the
+  native `terminate_on_life_loss`/`life_variable="lives"` path.
+- On 2026-06-19, Modal CPU eval throughput for W&B artifact
+  `tsilva/SuperMarioBros-NES/b31_post12_loosekl_5m_stop100ep100_clip015_targetkl012_clippeddx_seed23_20260618_192135-checkpoint:v44`
+  improved from `129.666s` for 100 episodes with `mario_level1_v1`
+  (`n_envs=1`, `0.771 eps/s`) to `25.627s` with `mario_level1_vec8_v1`
+  (`n_envs=8`, `3.902 eps/s`), a `5.1x` speedup. The first naive vec8 attempt
+  was faster but semantically wrong because Python-side completion termination
+  caused whole-vector resets; the validated path disables Python completion
+  termination inside the VecEnv and lets the evaluator finish lanes in batches.
 - `stable-retro-turbo==1.0.0.post12` returns native-vector training observations in channel-first shape `(n_envs, 4, 84, 84)`, so the repo must skip `VecTransposeImage` for that shape and only apply it to channel-last `(n_envs, 84, 84, 4)` runtimes.
 - On 2026-06-18, a single RTX4090 repro of W&B run `lexxixz3` with post12, seed 24, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, and a strict `100/100` terminal-episode stop trained successfully to the 5M cap but did not early-stop: final `68/100` recent completions, `189` total completions, `5,005,312` timesteps, `27m34s` progress-bar wall time, and final logged fps `3023`.
 - On 2026-06-18, a matched three-seed RTX4090 batch compared `stable-retro-turbo==1.0.0.post11` and `1.0.0.post12` with seeds `23`, `24`, and `25`, 3 concurrent children, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, strict `100/100` terminal-episode stop, and a 5M cap. Neither version reached the strict stop. Final recent completion rates were post11: seed23 `19/100`, seed24 `90/100`, seed25 `22/100`; post12: seed23 `6/100`, seed24 `85/100`, seed25 `55/100`. Mean final rate was post11 `0.437` vs post12 `0.487`; median final rate was post11 `0.22` vs post12 `0.55`; total completions were post11 `576` vs post12 `428`. Final logged SB3 fps averaged `1917` for post11 and `1943` for post12 in this concurrent shape, so this training workload did not show the package-level `+23.6%` throughput increase.
