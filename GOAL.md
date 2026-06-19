@@ -157,23 +157,51 @@ torch.use_deterministic_algorithms(True, warn_only=True)
 
 If used, mark deterministic CUDA as a separate runtime condition.
 
+## Current Winning Recipe
+
+The current preferred training recipe for SuperMarioBros-NES `Level1-1`
+screening is tracked in:
+
+```text
+experiments/recipes/supermariobros_nes_level1_winning_recipe.md
+```
+
+Short form:
+
+```text
+stable-retro-turbo: 1.0.0.post14
+base: B33 target_kl=0.20 recipe
+learning_rate: 1.5e-4 fixed
+ent_coef: 0.01 -> 0.0003 over 2M
+clip_range: 0.15
+target_kl: 0.20
+max_pool_frames: false
+stop: 100/100 completed terminal training episodes
+```
+
+Decision: use no-maxpool for the active winning screening recipe. B40 found a
+strict `100/100` seed and trained faster than B39. B39 still had the stronger
+five-seed average, so no-maxpool is promoted as the active recipe component,
+not yet as a statistically confirmed population-level baseline.
+
 ## Starting Config
 
 Start from this near-best shape unless explicitly ablating one axis:
 
 ```text
-stable-retro-turbo: 1.0.0.post12
+stable-retro-turbo: 1.0.0.post14
 state: Level1-1
 n_envs: 16
 env_threads: 4
 n_steps: 512
 batch_size: 512
 n_epochs: 10
-learning_rate: 2e-4 -> 1e-4 over 2M
+learning_rate: 1.5e-4 fixed
 ent_coef: 0.01 -> 0.0003 over 2M
 gamma: 0.9
 gae_lambda: 1.0
-clip_range: 0.2
+clip_range: 0.15
+target_kl: 0.20
 vf_coef: 1.0
 normalize_advantage: false
 adam_eps: 1e-8
@@ -182,7 +210,7 @@ terminal_reward: 50
 reward_scale: 10
 action_set: simple
 frame_skip: 4
-max_pool_frames: true
+max_pool_frames: false
 max_episode_steps: 4500
 completion_x_threshold: 3160
 terminate_on_completion: true
@@ -223,10 +251,10 @@ The historical best single run reached the older `80/100` criterion at
 reliably reproduced as a same-seed `80/100` result.
 
 ```text
-current_baseline_status: not confirmed
+current_baseline_status: winning screening recipe, not statistically confirmed baseline
 active_cap: 5,000,000
 target_stop: 100/100 completed episodes
-next_step: B35 hard-seed screen after B34 failed confirmation on seed25
+next_step: evaluate and reproduce the post14/no-maxpool winner, then confirm on fresh seeds
 ```
 
 ## Active Search Notes

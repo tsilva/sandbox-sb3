@@ -9,14 +9,25 @@ from pathlib import Path
 import gymnasium as gym
 import numpy as np
 
-from stable_retro_ppo.artifacts import build_s3_artifact_uri, checkpoint_step
+from scripts.play_wandb_artifact import build_parser as build_wandb_play_parser
+from stable_retro_ppo.artifacts import (
+    apply_config_defaults,
+    build_s3_artifact_uri,
+    checkpoint_step,
+    env_config_from_metadata,
+    explicit_arg_dests,
+    load_model_metadata,
+    model_metadata_path,
+    write_model_metadata,
+)
 from stable_retro_ppo.callbacks import ThroughputCallback
 from stable_retro_ppo.cli import build_train_command
-from stable_retro_ppo.env import EnvConfig, needs_vec_transpose_image
+from stable_retro_ppo.env import EnvConfig, StickyAction, needs_vec_transpose_image, resolve_env_config
 from stable_retro_ppo.env_config import env_config_from_args, parse_states
 from stable_retro_ppo.eval_metrics import episode_rank
-from stable_retro_ppo.eval_profiles import get_eval_profile
+from stable_retro_ppo.eval_profiles import EVAL_PROFILES, get_eval_profile
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
+from stable_retro_ppo.play import build_parser as build_play_parser
 from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
 from stable_retro_ppo.wandb_artifacts import artifact_download_dir, model_artifact_ref, safe_artifact_stem
 from scripts.eval_wandb_checkpoints import eval_seed_for_checkpoint
@@ -32,6 +43,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             state="Level1-1",
             frame_skip=4,
             max_pool_frames=True,
+            sticky_action_prob=0.25,
             max_steps=123,
             hud_crop_top=32,
             reward_mode="baseline",
@@ -54,7 +66,28 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         config = env_config_from_args(args, max_episode_steps_attr="max_steps")
         self.assertEqual(config.max_episode_steps, 123)
         self.assertEqual(config.action_set, "right")
+        self.assertEqual(config.sticky_action_prob, 0.25)
         self.assertTrue(config.terminate_on_life_loss)
+
+    def test_sticky_action_probability_defaults_to_disabled(self) -> None:
+        self.assertEqual(build_play_parser().parse_args([]).sticky_action_prob, 0.0)
+        self.assertEqual(build_wandb_play_parser().parse_args(["run"]).sticky_action_prob, 0.0)
+
+    def test_sticky_action_probability_parses_for_playback(self) -> None:
+        self.assertEqual(
+            build_play_parser().parse_args(["--sticky-action-prob", "0.25"]).sticky_action_prob,
+            0.25,
+        )
+        self.assertEqual(
+            build_wandb_play_parser()
+            .parse_args(["run", "--sticky-action-prob", "0.25"])
+            .sticky_action_prob,
+            0.25,
+        )
+
+    def test_invalid_sticky_action_probability_fails_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "sticky_action_prob"):
+            resolve_env_config(EnvConfig(game="SuperMarioBros-Nes-v0", sticky_action_prob=-0.1))
 
 
 class TargetTests(unittest.TestCase):
@@ -123,6 +156,31 @@ class VecImageShapeTests(unittest.TestCase):
             needs_vec_transpose_image(space)
 
 
+class StickyActionTests(unittest.TestCase):
+    def test_probability_one_reuses_previous_high_level_action(self) -> None:
+        class FakeEnv(gym.Env):
+            action_space = gym.spaces.Discrete(4)
+            observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+
+            def __init__(self) -> None:
+                self.actions: list[int] = []
+
+            def reset(self, **kwargs):
+                return np.zeros((1,), dtype=np.uint8), {}
+
+            def step(self, action):
+                self.actions.append(int(action))
+                return np.zeros((1,), dtype=np.uint8), 0.0, False, False, {}
+
+        env = StickyAction(FakeEnv(), sticky_action_prob=1.0)
+        env.reset(seed=7)
+        env.step(1)
+        env.step(2)
+        env.step(3)
+
+        self.assertEqual(env.unwrapped.actions, [1, 1, 1])
+
+
 class CommandAndArtifactTests(unittest.TestCase):
     def test_build_train_command_skips_empty_target_kl(self) -> None:
         cmd = build_train_command(
@@ -174,6 +232,56 @@ class CommandAndArtifactTests(unittest.TestCase):
             ),
             "s3://wandb/TestGame-Platform/candidate-run/checkpoint/ppo_test_100_steps.zip",
         )
+
+    def test_model_metadata_sidecar_records_env_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
+            model_path.write_bytes(b"zip")
+            args = argparse.Namespace(
+                run_name="run",
+                run_description="description",
+            )
+            config = EnvConfig(
+                game="SuperMarioBros-Nes-v0",
+                state="Level1-1",
+                max_pool_frames=False,
+                observation_size=96,
+                hud_crop_top=32,
+                action_set="simple",
+            )
+
+            path = write_model_metadata(model_path, args, config, kind="checkpoint")
+
+            self.assertEqual(path, model_metadata_path(model_path))
+            metadata = load_model_metadata(model_path)
+            self.assertEqual(metadata["checkpoint_step"], 100)
+            self.assertEqual(metadata["env_config"]["max_pool_frames"], False)
+            self.assertEqual(metadata["env_config"]["observation_size"], 96)
+            self.assertEqual(metadata["env_config"]["hud_crop_top"], 32)
+
+    def test_saved_playback_config_applies_unless_cli_overrides(self) -> None:
+        parser = build_play_parser()
+        parser_defaults = vars(parser.parse_args([]))
+        metadata = {
+            "env_config": {
+                "game": "SuperMarioBros-Nes-v0",
+                "max_pool_frames": False,
+                "observation_size": 96,
+                "hud_crop_top": 32,
+            }
+        }
+
+        args = parser.parse_args(["--model", "model.zip"])
+        apply_config_defaults(args, env_config_from_metadata(metadata), parser_defaults, set())
+        self.assertFalse(args.max_pool_frames)
+        self.assertEqual(args.observation_size, 96)
+        self.assertEqual(args.hud_crop_top, 32)
+
+        argv = ["--model", "model.zip", "--max-pool-frames"]
+        args = parser.parse_args(argv)
+        explicit_dests = explicit_arg_dests(parser, argv)
+        apply_config_defaults(args, env_config_from_metadata(metadata), parser_defaults, explicit_dests)
+        self.assertTrue(args.max_pool_frames)
 
 
 class EvalMetricTests(unittest.TestCase):
@@ -272,10 +380,11 @@ class EvalMetricTests(unittest.TestCase):
 
 
 class EvalProfileTests(unittest.TestCase):
-    def test_mario_level1_profile_pins_eval_contract(self) -> None:
-        profile = get_eval_profile("mario_level1_v1")
+    def test_default_profile_pins_mario_level1_eval_contract(self) -> None:
+        profile = get_eval_profile()
         config = profile.env_config()
 
+        self.assertEqual(profile.name, "mario_level1_no_life_loss_v1")
         self.assertEqual(profile.n_envs, 1)
         self.assertFalse(profile.deterministic)
         self.assertEqual(profile.frame_stack, 4)
@@ -285,40 +394,11 @@ class EvalProfileTests(unittest.TestCase):
         self.assertEqual(config.action_set, "simple")
         self.assertEqual(config.hud_crop_top, 32)
         self.assertEqual(config.completion_x_threshold, 3160)
-        self.assertTrue(config.terminate_on_life_loss)
-        self.assertTrue(config.terminate_on_completion)
-
-    def test_mario_level1_no_life_loss_profile_only_changes_life_loss_terminal(self) -> None:
-        baseline = get_eval_profile("mario_level1_v1")
-        profile = get_eval_profile("mario_level1_no_life_loss_v1")
-        config = profile.env_config()
-
-        baseline_metadata = baseline.metadata()
-        profile_metadata = profile.metadata()
-        for key in ("name", "terminate_on_life_loss"):
-            baseline_metadata.pop(key)
-            profile_metadata.pop(key)
-        self.assertEqual(profile_metadata, baseline_metadata)
         self.assertFalse(config.terminate_on_life_loss)
         self.assertTrue(config.terminate_on_completion)
 
-    def test_mario_level1_vector_profiles_only_change_env_count(self) -> None:
-        baseline = get_eval_profile("mario_level1_v1")
-
-        for profile_name, expected_n_envs in (
-            ("mario_level1_vec8_v1", 8),
-            ("mario_level1_vec20_v1", 20),
-            ("mario_level1_vec24_v1", 24),
-        ):
-            with self.subTest(profile_name=profile_name):
-                profile = get_eval_profile(profile_name)
-                baseline_metadata = baseline.metadata()
-                profile_metadata = profile.metadata()
-                for key in ("name", "n_envs"):
-                    baseline_metadata.pop(key)
-                    profile_metadata.pop(key)
-                self.assertEqual(profile_metadata, baseline_metadata)
-                self.assertEqual(profile.n_envs, expected_n_envs)
+    def test_only_mario_level1_profile_is_registered(self) -> None:
+        self.assertEqual(set(EVAL_PROFILES), {"mario_level1_no_life_loss_v1"})
 
 
 class ThroughputCallbackTests(unittest.TestCase):

@@ -101,6 +101,7 @@ def main() -> None:
     artifact_callback = WandbCheckpointArtifactCallback(
         wandb_run,
         args,
+        config,
         checkpoint_dir,
         scan_freq=checkpoint_save_freq,
     )
@@ -170,6 +171,7 @@ def main() -> None:
             log_wandb_model_artifact(
                 wandb_run,
                 args,
+                config,
                 best_model_path,
                 kind="best",
                 aliases=["best", "latest"],
@@ -177,6 +179,7 @@ def main() -> None:
         log_wandb_model_artifact(
             wandb_run,
             args,
+            config,
             final_model_path,
             kind="final",
             aliases=["final", "latest"],

@@ -49,6 +49,7 @@ class EnvConfig:
     states: tuple[str, ...] = ()
     frame_skip: int = 4
     max_pool_frames: bool = True
+    sticky_action_prob: float = 0.0
     max_episode_steps: int = 4500
     observation_size: int = 84
     hud_crop_top: int = -1
@@ -77,6 +78,7 @@ class EnvConfig:
 def resolve_env_config(config: EnvConfig) -> EnvConfig:
     if not config.game:
         raise ValueError("game is required; pass --game or set RETRO_GAME")
+    _validate_sticky_action_prob(config.sticky_action_prob)
     target = target_for_game(config.game)
     updates: dict[str, Any] = {}
     if not config.state and target.default_state:
@@ -133,6 +135,77 @@ class VecDiscreteRetroActions(VecEnvWrapper):
     def step_async(self, actions):
         action_indices = np.asarray(actions, dtype=np.int64).reshape(-1)
         self.venv.step_async(self.actions[action_indices])
+
+    def step_wait(self):
+        return self.venv.step_wait()
+
+
+def _validate_sticky_action_prob(sticky_action_prob: float) -> float:
+    sticky_action_prob = float(sticky_action_prob)
+    if not 0.0 <= sticky_action_prob <= 1.0:
+        raise ValueError("sticky_action_prob must be between 0.0 and 1.0")
+    return sticky_action_prob
+
+
+def _copy_action(action: Any) -> Any:
+    if isinstance(action, np.ndarray):
+        return action.copy()
+    return action
+
+
+class StickyAction(gym.Wrapper):
+    """Repeat the previous high-level action with a fixed probability."""
+
+    def __init__(self, env: gym.Env, sticky_action_prob: float):
+        super().__init__(env)
+        self.sticky_action_prob = _validate_sticky_action_prob(sticky_action_prob)
+        self.rng = np.random.default_rng()
+        self.last_action: Any | None = None
+
+    def reset(self, **kwargs):
+        seed = kwargs.get("seed")
+        if seed is not None:
+            self.rng = np.random.default_rng(int(seed))
+        self.last_action = None
+        return self.env.reset(**kwargs)
+
+    def step(self, action: Any):
+        if (
+            self.last_action is not None
+            and self.sticky_action_prob > 0.0
+            and self.rng.random() < self.sticky_action_prob
+        ):
+            effective_action = _copy_action(self.last_action)
+        else:
+            effective_action = _copy_action(action)
+        self.last_action = _copy_action(effective_action)
+        return self.env.step(effective_action)
+
+
+class VecStickyAction(VecEnvWrapper):
+    """Vectorized sticky actions applied once per SB3 env step."""
+
+    def __init__(self, venv, sticky_action_prob: float, seed: int | None = None):
+        super().__init__(
+            venv,
+            observation_space=venv.observation_space,
+            action_space=venv.action_space,
+        )
+        self.sticky_action_prob = _validate_sticky_action_prob(sticky_action_prob)
+        self.rng = np.random.default_rng(seed)
+        self.last_actions: np.ndarray | None = None
+
+    def reset(self):
+        self.last_actions = None
+        return self.venv.reset()
+
+    def step_async(self, actions):
+        action_array = np.asarray(actions).copy()
+        if self.last_actions is not None and self.sticky_action_prob > 0.0:
+            sticky_mask = self.rng.random(action_array.shape[0]) < self.sticky_action_prob
+            action_array[sticky_mask] = self.last_actions[sticky_mask]
+        self.last_actions = action_array.copy()
+        self.venv.step_async(action_array)
 
     def step_wait(self):
         return self.venv.step_wait()
@@ -335,6 +408,8 @@ def make_fast_retro_env(config: EnvConfig | None = None, seed: int | None = None
     )
     if target.uses_discrete_actions(config.action_set):
         env = DiscreteRetroActions(env, config=config)
+    if config.sticky_action_prob > 0.0:
+        env = StickyAction(env, config.sticky_action_prob)
     env = RetroProgressInfo(env, config=config)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=config.max_episode_steps)
     if config.clip_rewards:
@@ -357,6 +432,8 @@ def wrap_retro_env(env: gym.Env, config: EnvConfig, seed: int | None = None) -> 
     if target.uses_discrete_actions(config.action_set):
         env = DiscreteRetroActions(env, config=config)
     env = FrameSkip(env, config.frame_skip, max_pool=config.max_pool_frames)
+    if config.sticky_action_prob > 0.0:
+        env = StickyAction(env, config.sticky_action_prob)
     env = RetroProgressInfo(env, config=config)
     env = RetroPreprocess(env, config.observation_size, hud_crop_top=config.hud_crop_top)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=config.max_episode_steps)
@@ -450,6 +527,8 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
     vec_env.seed(seed)
     if target.uses_discrete_actions(config.action_set):
         vec_env = VecDiscreteRetroActions(vec_env, config=config)
+    if config.sticky_action_prob > 0.0:
+        vec_env = VecStickyAction(vec_env, config.sticky_action_prob, seed=seed)
     progress_config = (
         replace(config, terminate_on_life_loss=False)
         if native_life_loss_supported

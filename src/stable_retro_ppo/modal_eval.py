@@ -84,6 +84,13 @@ def connect():
     return psycopg2.connect(database_url(), cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+def close_quietly(conn) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
 def json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): json_safe(item) for key, item in value.items()}
@@ -231,6 +238,36 @@ def commit_result(
             return cur.rowcount == 1
 
 
+def commit_result_with_reconnect(
+    conn,
+    *,
+    job: dict[str, Any],
+    worker_id: str,
+    metrics: dict[str, Any],
+) -> tuple[bool, Any]:
+    try:
+        return commit_result(conn, job=job, worker_id=worker_id, metrics=metrics), conn
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        close_quietly(conn)
+        conn = connect()
+        return commit_result(conn, job=job, worker_id=worker_id, metrics=metrics), conn
+
+
+def mark_job_failed_with_reconnect(
+    conn,
+    *,
+    job: dict[str, Any],
+    worker_id: str,
+    error: str,
+) -> tuple[bool, Any]:
+    try:
+        return mark_job_failed(conn, job=job, worker_id=worker_id, error=error), conn
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        close_quietly(conn)
+        conn = connect()
+        return mark_job_failed(conn, job=job, worker_id=worker_id, error=error), conn
+
+
 def download_model_artifact(ref: str) -> Path:
     import wandb
 
@@ -278,7 +315,7 @@ def evaluate_job(job: dict[str, Any], *, device: str) -> dict[str, Any]:
 )
 def eval_artifact_benchmark_remote(
     artifact_ref: str,
-    eval_profile: str = "mario_level1_v1",
+    eval_profile: str = "mario_level1_no_life_loss_v1",
     episodes: int = 100,
     seed: int = 10007,
     n_envs: int = 0,
@@ -347,7 +384,7 @@ def eval_artifact_benchmark_remote(
 @app.local_entrypoint()
 def eval_artifact_benchmark(
     artifact_ref: str,
-    eval_profile: str = "mario_level1_v1",
+    eval_profile: str = "mario_level1_no_life_loss_v1",
     episodes: int = 100,
     seed: int = 10007,
     n_envs: int = 0,
@@ -419,7 +456,10 @@ def eval_worker_remote(
             )
             try:
                 metrics = evaluate_job(job, device=device)
-                if commit_result(conn, job=job, worker_id=worker_id, metrics=metrics):
+                committed, conn = commit_result_with_reconnect(
+                    conn, job=job, worker_id=worker_id, metrics=metrics
+                )
+                if committed:
                     completed += 1
                     processed_jobs.append(int(job["id"]))
                     print(
@@ -436,10 +476,19 @@ def eval_worker_remote(
                     print(f"lost lease worker={worker_id} job_id={job['id']}", flush=True)
             except Exception as exc:
                 failed += 1
-                mark_job_failed(conn, job=job, worker_id=worker_id, error=repr(exc))
-                print(f"failed worker={worker_id} job_id={job['id']} error={exc!r}", flush=True)
+                try:
+                    marked_failed, conn = mark_job_failed_with_reconnect(
+                        conn, job=job, worker_id=worker_id, error=repr(exc)
+                    )
+                    suffix = "" if marked_failed else " mark_failed=false"
+                except Exception as mark_exc:
+                    suffix = f" mark_failed_error={mark_exc!r}"
+                print(
+                    f"failed worker={worker_id} job_id={job['id']} error={exc!r}{suffix}",
+                    flush=True,
+                )
     finally:
-        conn.close()
+        close_quietly(conn)
         volume.commit()
 
     return {

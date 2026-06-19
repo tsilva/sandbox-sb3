@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS checkpoint_candidates (
 CREATE TABLE IF NOT EXISTS eval_jobs (
   id BIGSERIAL PRIMARY KEY,
   candidate_id BIGINT NOT NULL REFERENCES checkpoint_candidates(id) ON DELETE CASCADE,
-  eval_profile TEXT NOT NULL DEFAULT 'mario_level1_v1',
+  eval_profile TEXT NOT NULL DEFAULT 'mario_level1_no_life_loss_v1',
   stage TEXT NOT NULL,
   episodes INTEGER NOT NULL,
   seed_start INTEGER NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS eval_results (
   id BIGSERIAL PRIMARY KEY,
   candidate_id BIGINT NOT NULL REFERENCES checkpoint_candidates(id) ON DELETE CASCADE,
   job_id BIGINT REFERENCES eval_jobs(id) ON DELETE SET NULL,
-  eval_profile TEXT NOT NULL DEFAULT 'mario_level1_v1',
+  eval_profile TEXT NOT NULL DEFAULT 'mario_level1_no_life_loss_v1',
   stage TEXT NOT NULL,
   episodes INTEGER NOT NULL,
   seed_start INTEGER NOT NULL,
@@ -61,10 +61,10 @@ CREATE TABLE IF NOT EXISTS eval_results (
 );
 
 ALTER TABLE eval_jobs
-  ADD COLUMN IF NOT EXISTS eval_profile TEXT NOT NULL DEFAULT 'mario_level1_v1';
+  ADD COLUMN IF NOT EXISTS eval_profile TEXT NOT NULL DEFAULT 'mario_level1_no_life_loss_v1';
 
 ALTER TABLE eval_results
-  ADD COLUMN IF NOT EXISTS eval_profile TEXT NOT NULL DEFAULT 'mario_level1_v1';
+  ADD COLUMN IF NOT EXISTS eval_profile TEXT NOT NULL DEFAULT 'mario_level1_no_life_loss_v1';
 
 ALTER TABLE eval_jobs
   DROP CONSTRAINT IF EXISTS eval_jobs_candidate_id_stage_episodes_seed_start_key;
@@ -98,8 +98,8 @@ CREATE INDEX IF NOT EXISTS eval_jobs_claim_idx
   ON eval_jobs (status, priority DESC, id)
   WHERE status IN ('pending', 'running');
 
-CREATE INDEX IF NOT EXISTS eval_results_rank_idx
-  ON eval_results (eval_profile, stage, completion_rate DESC, max_x_max DESC, reward_mean DESC);
+CREATE INDEX IF NOT EXISTS eval_results_rank_v2_idx
+  ON eval_results (eval_profile, stage, completion_rate DESC, reward_mean DESC, max_x_max DESC);
 """
 
 

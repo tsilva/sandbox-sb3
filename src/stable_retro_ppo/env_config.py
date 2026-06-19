@@ -28,6 +28,7 @@ def env_config_from_args(
         "state": value("state"),
         "frame_skip": value("frame_skip"),
         "max_pool_frames": value("max_pool_frames"),
+        "sticky_action_prob": value("sticky_action_prob"),
         "max_episode_steps": max_episode_steps,
         "hud_crop_top": value("hud_crop_top"),
         "use_retro_reward": value("use_retro_reward"),

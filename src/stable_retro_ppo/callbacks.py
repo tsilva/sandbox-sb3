@@ -8,7 +8,8 @@ from typing import Callable
 
 from stable_baselines3.common.callbacks import BaseCallback
 
-from stable_retro_ppo.artifacts import checkpoint_step, log_wandb_model_artifact, wandb_artifacts_enabled
+from stable_retro_ppo.artifacts import checkpoint_step, log_wandb_model_artifact
+from stable_retro_ppo.env import EnvConfig
 
 
 class WandbCheckpointArtifactCallback(BaseCallback):
@@ -16,12 +17,14 @@ class WandbCheckpointArtifactCallback(BaseCallback):
         self,
         wandb_run,
         args: argparse.Namespace,
+        config: EnvConfig,
         checkpoint_dir: str,
         scan_freq: int,
     ):
         super().__init__()
         self.wandb_run = wandb_run
         self.args = args
+        self.config = config
         self.checkpoint_dir = Path(checkpoint_dir)
         self.scan_freq = scan_freq
         self.logged_paths: set[Path] = set()
@@ -32,9 +35,6 @@ class WandbCheckpointArtifactCallback(BaseCallback):
         return True
 
     def log_new_checkpoints(self) -> None:
-        if not wandb_artifacts_enabled(self.wandb_run, self.args):
-            return
-
         for checkpoint_path in sorted(self.checkpoint_dir.glob("*.zip")):
             resolved_path = checkpoint_path.resolve()
             if resolved_path in self.logged_paths:
@@ -46,6 +46,7 @@ class WandbCheckpointArtifactCallback(BaseCallback):
             log_wandb_model_artifact(
                 self.wandb_run,
                 self.args,
+                self.config,
                 checkpoint_path,
                 kind="checkpoint",
                 aliases=aliases,

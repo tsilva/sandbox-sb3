@@ -48,7 +48,7 @@ def fetch_all(cur, query: str, params: dict[str, Any] | None = None) -> list[dic
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Report Neon eval queue results.")
-    parser.add_argument("--eval-profile", default="mario_level1_no_life_loss_v1")
+    parser.add_argument("--eval-profile", default="mario_level1_v1")
     parser.add_argument("--stage", default="quick")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed-start", type=int, default=10007)
@@ -140,7 +140,7 @@ def main() -> None:
                   AND r.stage = %(stage)s
                   AND r.episodes = %(episodes)s
                   AND r.seed_start = %(seed_start)s
-                ORDER BY r.completion_rate DESC, r.max_x_max DESC, r.reward_mean DESC
+                ORDER BY r.completion_rate DESC, r.reward_mean DESC, r.max_x_max DESC
                 LIMIT %(limit)s
                 """,
                 params,

@@ -16,7 +16,7 @@ Before choosing hardware, launching remote training, changing concurrency, or re
 - Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
 - Log to W&B and upload checkpoint/final artifacts unless explicitly opted out.
 - Every run needs a specific description via `--run-description` or Modal `run_description`.
-- Do not run robust evals inside remote training by default. Evaluate checkpoints out of process; promote by completion rate, then max x-position, then mean reward.
+- Do not run robust evals inside remote training by default. Evaluate checkpoints out of process; promote by completion rate, then mean reward, then max x-position.
 - Default Modal shape unless overridden: `cpu=16.0`, `memory=32768`, `gpu=T4`, `n_envs=32`, `env_threads=0`, `torch_num_threads=0`, `n_steps=512`, `batch_size=256`, `n_epochs=10`.
 
 ## Model Cards

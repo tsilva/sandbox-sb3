@@ -163,12 +163,12 @@ favored more children.
   native `terminate_on_life_loss`/`life_variable="lives"` path.
 - On 2026-06-19, Modal CPU eval throughput for W&B artifact
   `tsilva/SuperMarioBros-NES/b31_post12_loosekl_5m_stop100ep100_clip015_targetkl012_clippeddx_seed23_20260618_192135-checkpoint:v44`
-  improved from `129.666s` for 100 episodes with `mario_level1_v1`
-  (`n_envs=1`, `0.771 eps/s`) to `25.627s` with `mario_level1_vec8_v1`
-  (`n_envs=8`, `3.902 eps/s`), a `5.1x` speedup. The first naive vec8 attempt
-  was faster but semantically wrong because Python-side completion termination
-  caused whole-vector resets; the validated path disables Python completion
-  termination inside the VecEnv and lets the evaluator finish lanes in batches.
+  improved from the old single-lane profile (`129.666s` for 100 episodes,
+  `0.771 eps/s`) to the validated vectorized no-life-loss path (`25.627s`,
+  `3.902 eps/s`), a `5.1x` speedup. The first naive vector attempt was faster
+  but semantically wrong because Python-side completion termination caused
+  whole-vector resets; the validated path disables Python completion termination
+  inside the VecEnv and lets the evaluator finish lanes in batches.
 - A follow-up Modal cost sweep on the same artifact found the best measured
   `$ / episode` point at `cpu=1`, `memory=4096`, `n_envs=20`: `31.436s` total
   for 100 episodes, `3.181 eps/s`, about `$0.0069 / 1000 episodes` at listed
@@ -177,9 +177,9 @@ favored more children.
   measured wall-clock point was `cpu=8`, `memory=4096`, `n_envs=16` at
   `21.644s` for 100 episodes, but about `$0.0246 / 1000 episodes`. For balanced
   speed/cost without 8 CPU, `cpu=4`, `memory=4096`, `n_envs=24` took `25.877s`
-  and cost about `$0.0159 / 1000 episodes`. Prefer `mario_level1_vec20_v1` with
-  `eval_queue --cpu 1 --memory-mib 4096` for cheapest eval throughput, or
-  `mario_level1_vec24_v1` with `--cpu 4 --memory-mib 4096` for faster turnaround.
+  and cost about `$0.0159 / 1000 episodes`. Prefer `mario_level1_no_life_loss_v1`, whose
+  current canonical semantics are no-life-loss, with
+  `eval_queue --cpu 1 --memory-mib 4096` for cheapest eval throughput.
 - `stable-retro-turbo==1.0.0.post12` returns native-vector training observations in channel-first shape `(n_envs, 4, 84, 84)`, so the repo must skip `VecTransposeImage` for that shape and only apply it to channel-last `(n_envs, 84, 84, 4)` runtimes.
 - On 2026-06-18, a single RTX4090 repro of W&B run `lexxixz3` with post12, seed 24, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, and a strict `100/100` terminal-episode stop trained successfully to the 5M cap but did not early-stop: final `68/100` recent completions, `189` total completions, `5,005,312` timesteps, `27m34s` progress-bar wall time, and final logged fps `3023`.
 - On 2026-06-18, a matched three-seed RTX4090 batch compared `stable-retro-turbo==1.0.0.post11` and `1.0.0.post12` with seeds `23`, `24`, and `25`, 3 concurrent children, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, strict `100/100` terminal-episode stop, and a 5M cap. Neither version reached the strict stop. Final recent completion rates were post11: seed23 `19/100`, seed24 `90/100`, seed25 `22/100`; post12: seed23 `6/100`, seed24 `85/100`, seed25 `55/100`. Mean final rate was post11 `0.437` vs post12 `0.487`; median final rate was post11 `0.22` vs post12 `0.55`; total completions were post11 `576` vs post12 `428`. Final logged SB3 fps averaged `1917` for post11 and `1943` for post12 in this concurrent shape, so this training workload did not show the package-level `+23.6%` throughput increase.

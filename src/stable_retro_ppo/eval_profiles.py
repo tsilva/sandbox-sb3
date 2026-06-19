@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from stable_retro_ppo.env import EnvConfig, resolve_env_config
 
 
-DEFAULT_EVAL_PROFILE = "mario_level1_v1"
+DEFAULT_EVAL_PROFILE = "mario_level1_no_life_loss_v1"
 
 
 @dataclass(frozen=True)
@@ -74,8 +74,8 @@ class EvalProfile:
         return asdict(self)
 
 
-MARIO_LEVEL1_V1 = EvalProfile(
-    name="mario_level1_v1",
+MARIO_LEVEL1_NO_LIFE_LOSS_V1 = EvalProfile(
+    name="mario_level1_no_life_loss_v1",
     game="SuperMarioBros-Nes-v0",
     state="Level1-1",
     frame_skip=4,
@@ -98,7 +98,7 @@ MARIO_LEVEL1_V1 = EvalProfile(
     action_set="simple",
     max_episode_steps=4500,
     completion_x_threshold=3160,
-    terminate_on_life_loss=True,
+    terminate_on_life_loss=False,
     terminate_on_level_change=False,
     terminate_on_completion=True,
     n_envs=1,
@@ -106,37 +106,9 @@ MARIO_LEVEL1_V1 = EvalProfile(
     deterministic=False,
 )
 
-MARIO_LEVEL1_NO_LIFE_LOSS_V1 = replace(
-    MARIO_LEVEL1_V1,
-    name="mario_level1_no_life_loss_v1",
-    terminate_on_life_loss=False,
-)
-
-MARIO_LEVEL1_VEC8_V1 = replace(
-    MARIO_LEVEL1_V1,
-    name="mario_level1_vec8_v1",
-    n_envs=8,
-)
-
-MARIO_LEVEL1_VEC20_V1 = replace(
-    MARIO_LEVEL1_V1,
-    name="mario_level1_vec20_v1",
-    n_envs=20,
-)
-
-MARIO_LEVEL1_VEC24_V1 = replace(
-    MARIO_LEVEL1_V1,
-    name="mario_level1_vec24_v1",
-    n_envs=24,
-)
-
 
 EVAL_PROFILES: dict[str, EvalProfile] = {
-    MARIO_LEVEL1_V1.name: MARIO_LEVEL1_V1,
     MARIO_LEVEL1_NO_LIFE_LOSS_V1.name: MARIO_LEVEL1_NO_LIFE_LOSS_V1,
-    MARIO_LEVEL1_VEC8_V1.name: MARIO_LEVEL1_VEC8_V1,
-    MARIO_LEVEL1_VEC20_V1.name: MARIO_LEVEL1_VEC20_V1,
-    MARIO_LEVEL1_VEC24_V1.name: MARIO_LEVEL1_VEC24_V1,
 }
 
 

@@ -5,38 +5,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-from stable_retro_ppo.env import EnvConfig
+from stable_retro_ppo.artifacts import (
+    apply_config_defaults,
+    env_config_from_metadata,
+    explicit_arg_dests,
+    load_model_metadata,
+    write_model_metadata,
+)
+from stable_retro_ppo.env import EnvConfig, resolve_env_config
+from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.wandb_artifacts import (
     artifact_download_dir,
     download_model_artifact,
     model_artifact_ref,
 )
 from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
-
-
-RUN_CONFIG_ARG_KEYS = {
-    "game": ("game",),
-    "state": ("state",),
-    "frame_skip": ("frame_skip",),
-    "max_pool_frames": ("max_pool_frames",),
-    "max_steps": ("max_steps", "max_episode_steps"),
-    "reward_mode": ("reward_mode",),
-    "progress_reward_cap": ("progress_reward_cap",),
-    "progress_reward_scale": ("progress_reward_scale",),
-    "terminal_reward": ("terminal_reward",),
-    "reward_scale": ("reward_scale",),
-    "time_penalty": ("time_penalty",),
-    "death_penalty": ("death_penalty",),
-    "completion_reward": ("completion_reward",),
-    "score_progress_clipped": ("score_progress_clipped",),
-    "no_progress_timeout_steps": ("no_progress_timeout_steps",),
-    "no_progress_min_delta": ("no_progress_min_delta",),
-    "completion_x_threshold": ("completion_x_threshold",),
-    "terminate_on_life_loss": ("terminate_on_life_loss",),
-    "terminate_on_level_change": ("terminate_on_level_change",),
-    "terminate_on_completion": ("terminate_on_completion",),
-    "action_set": ("action_set",),
-}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,7 +40,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--sticky-action-prob",
+        type=float,
+        default=defaults.sticky_action_prob,
+        help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
+    )
     parser.add_argument("--max-steps", type=int, default=1200)
+    parser.add_argument("--observation-size", type=int, default=defaults.observation_size)
+    parser.add_argument(
+        "--hud-crop-top",
+        type=int,
+        default=defaults.hud_crop_top,
+        help="Crop this many pixels from the top of raw frames before grayscale resize.",
+    )
+    parser.add_argument("--obs-resize-algorithm", default=defaults.obs_resize_algorithm)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--random-seeds", action="store_true")
     parser.add_argument("--fps", type=float, default=30.0)
@@ -68,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "baseline", "bounded", "additive", "score", "native"],
         default=defaults.reward_mode,
     )
+    parser.add_argument("--use-retro-reward", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--clip-rewards", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
     parser.add_argument("--terminal-reward", type=float, default=50.0)
@@ -108,6 +107,7 @@ def apply_artifact_run_config_defaults(
     args: argparse.Namespace,
     ref: str,
     parser_defaults: dict[str, object],
+    explicit_dests: set[str],
 ) -> None:
     load_wandb_env()
 
@@ -122,15 +122,7 @@ def apply_artifact_run_config_defaults(
         return
 
     config = getattr(run, "config", {}) or {}
-    for arg_name, config_keys in RUN_CONFIG_ARG_KEYS.items():
-        current_value = getattr(args, arg_name)
-        default_value = parser_defaults[arg_name]
-        if current_value != default_value and current_value not in ("", None):
-            continue
-        for config_key in config_keys:
-            if config_key in config and config[config_key] is not None:
-                setattr(args, arg_name, config[config_key])
-                break
+    apply_config_defaults(args, config, parser_defaults, explicit_dests)
 
 
 def play_model(model_path: Path, args: argparse.Namespace) -> None:
@@ -148,8 +140,16 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
         args.state,
         "--max-steps",
         str(args.max_steps),
+        "--observation-size",
+        str(args.observation_size),
+        "--hud-crop-top",
+        str(args.hud_crop_top),
+        "--obs-resize-algorithm",
+        args.obs_resize_algorithm,
         "--frame-skip",
         str(args.frame_skip),
+        "--sticky-action-prob",
+        str(args.sticky_action_prob),
         "--seed",
         str(args.seed),
         "--fps",
@@ -183,9 +183,19 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
     ]
     if args.score_progress_clipped:
         cmd.append("--score-progress-clipped")
+    if args.use_retro_reward:
+        cmd.append("--use-retro-reward")
+    else:
+        cmd.append("--no-use-retro-reward")
+    if args.clip_rewards:
+        cmd.append("--clip-rewards")
+    else:
+        cmd.append("--no-clip-rewards")
     if args.stochastic:
         cmd.append("--stochastic")
-    if not args.max_pool_frames:
+    if args.max_pool_frames:
+        cmd.append("--max-pool-frames")
+    else:
         cmd.append("--no-max-pool-frames")
     if args.random_seeds:
         cmd.append("--random-seeds")
@@ -204,12 +214,21 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
 def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
+    explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
     args = parser.parse_args()
     ref = artifact_ref(args)
-    apply_artifact_run_config_defaults(args, ref, parser_defaults)
     download_root = artifact_download_dir(Path(args.root), ref)
     print(f"Downloading {ref} to {download_root}")
     model_path = download_model_artifact(ref, download_root)
+    saved_config = env_config_from_metadata(load_model_metadata(model_path))
+    if saved_config:
+        apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
+    else:
+        apply_artifact_run_config_defaults(args, ref, parser_defaults, explicit_dests)
+    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
+    metadata_path = write_model_metadata(model_path, args, config, kind=args.kind)
+    if metadata_path is not None:
+        print(f"Wrote playback metadata: {metadata_path}")
     print(f"Downloaded model: {model_path}")
     if not args.download_only:
         play_model(model_path, args)

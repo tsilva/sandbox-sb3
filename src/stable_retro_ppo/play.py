@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from collections import deque
 from itertools import count
+from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
@@ -16,6 +18,12 @@ import pygame
 import torch
 from stable_baselines3 import PPO
 
+from stable_retro_ppo.artifacts import (
+    apply_config_defaults,
+    env_config_from_metadata,
+    explicit_arg_dests,
+    load_model_metadata,
+)
 from stable_retro_ppo.device import resolve_sb3_device
 from stable_retro_ppo.env import (
     EnvConfig,
@@ -257,13 +265,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--sticky-action-prob",
+        type=float,
+        default=defaults.sticky_action_prob,
+        help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
+    )
     parser.add_argument("--max-steps", type=int, default=1200)
+    parser.add_argument("--observation-size", type=int, default=defaults.observation_size)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
         default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
+    parser.add_argument("--obs-resize-algorithm", default=defaults.obs_resize_algorithm)
     parser.add_argument(
         "--episodes", type=int, default=3, help="Number of episodes; use 0 to run forever"
     )
@@ -300,6 +316,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "baseline", "bounded", "additive", "score", "native"],
         default=defaults.reward_mode,
     )
+    parser.add_argument("--use-retro-reward", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--clip-rewards", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--progress-reward-cap", type=float, default=30.0)
     parser.add_argument("--progress-reward-scale", type=float, default=1.0)
     parser.add_argument("--terminal-reward", type=float, default=50.0)
@@ -323,7 +341,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    parser_defaults = vars(parser.parse_args([]))
+    explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
+    args = parser.parse_args()
+    metadata = load_model_metadata(Path(args.model))
+    saved_config = env_config_from_metadata(metadata)
+    if saved_config:
+        apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
+        print(f"loaded playback metadata: {Path(args.model).with_suffix('.metadata.json')}", flush=True)
     assert_rom_imported(args.game)
     model = PPO.load(args.model, device=resolve_sb3_device(args.device))
     config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))

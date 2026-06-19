@@ -4,6 +4,7 @@ import re
 import sys
 from pathlib import Path
 
+from stable_retro_ppo.artifacts import model_metadata_path
 from stable_retro_ppo.wandb_utils import load_wandb_env
 
 
@@ -35,7 +36,14 @@ def download_model_artifact(ref: str, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     artifact = wandb.Api().artifact(ref, type="model")
     path = Path(artifact.download(root=str(root)))
-    return model_zip_from_download(path)
+    model_path = model_zip_from_download(path)
+    metadata = getattr(artifact, "metadata", None)
+    if isinstance(metadata, dict) and metadata:
+        model_metadata_path(model_path).write_text(
+            wandb.util.json_dumps_safer(metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return model_path
 
 
 def model_zip_from_download(path: Path) -> Path:

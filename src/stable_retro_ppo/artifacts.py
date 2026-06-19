@@ -1,14 +1,140 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from stable_retro_ppo.env import EnvConfig
 from stable_retro_ppo.wandb_utils import load_wandb_env
+
+
+MODEL_METADATA_VERSION = 1
+
+PLAYBACK_ENV_ARG_KEYS = {
+    "game": ("game",),
+    "state": ("state",),
+    "frame_skip": ("frame_skip",),
+    "max_pool_frames": ("max_pool_frames",),
+    "sticky_action_prob": ("sticky_action_prob",),
+    "max_steps": ("max_steps", "max_episode_steps"),
+    "observation_size": ("observation_size",),
+    "hud_crop_top": ("hud_crop_top",),
+    "obs_resize_algorithm": ("obs_resize_algorithm",),
+    "use_retro_reward": ("use_retro_reward",),
+    "clip_rewards": ("clip_rewards",),
+    "reward_mode": ("reward_mode",),
+    "progress_reward_cap": ("progress_reward_cap",),
+    "progress_reward_scale": ("progress_reward_scale",),
+    "terminal_reward": ("terminal_reward",),
+    "reward_scale": ("reward_scale",),
+    "time_penalty": ("time_penalty",),
+    "death_penalty": ("death_penalty",),
+    "completion_reward": ("completion_reward",),
+    "score_progress_clipped": ("score_progress_clipped",),
+    "no_progress_timeout_steps": ("no_progress_timeout_steps",),
+    "no_progress_min_delta": ("no_progress_min_delta",),
+    "completion_x_threshold": ("completion_x_threshold",),
+    "terminate_on_life_loss": ("terminate_on_life_loss",),
+    "terminate_on_level_change": ("terminate_on_level_change",),
+    "terminate_on_completion": ("terminate_on_completion",),
+    "action_set": ("action_set",),
+}
+
+
+def explicit_arg_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    option_dests: dict[str, str] = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_dests[option] = action.dest
+    return {
+        option_dests[arg.split("=", 1)[0]]
+        for arg in argv
+        if arg.split("=", 1)[0] in option_dests
+    }
+
+
+def env_config_metadata(config: EnvConfig) -> dict[str, Any]:
+    return asdict(config)
+
+
+def model_metadata_path(model_path: Path) -> Path:
+    return model_path.with_suffix(".metadata.json")
+
+
+def build_model_metadata(
+    args: argparse.Namespace,
+    config: EnvConfig,
+    model_path: Path,
+    kind: str,
+) -> dict[str, Any]:
+    return {
+        "metadata_version": MODEL_METADATA_VERSION,
+        "kind": kind,
+        "filename": model_path.name,
+        "run_name": getattr(args, "run_name", ""),
+        "run_description": getattr(args, "run_description", ""),
+        "checkpoint_step": checkpoint_step(model_path),
+        "env_config": env_config_metadata(config),
+    }
+
+
+def write_model_metadata(
+    model_path: Path,
+    args: argparse.Namespace,
+    config: EnvConfig,
+    kind: str,
+) -> Path | None:
+    if not model_path.is_file():
+        return None
+    path = model_metadata_path(model_path)
+    path.write_text(
+        json.dumps(build_model_metadata(args, config, model_path, kind), indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_model_metadata(model_path: Path) -> dict[str, Any]:
+    path = model_metadata_path(model_path)
+    if not path.is_file():
+        return {}
+    try:
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"warning: could not parse model metadata {path}: {exc}", file=sys.stderr)
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def env_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    env_config = metadata.get("env_config", {})
+    return env_config if isinstance(env_config, dict) else {}
+
+
+def apply_config_defaults(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    parser_defaults: dict[str, object],
+    explicit_dests: set[str],
+) -> None:
+    for arg_name, config_keys in PLAYBACK_ENV_ARG_KEYS.items():
+        if arg_name in explicit_dests:
+            continue
+        current_value = getattr(args, arg_name)
+        default_value = parser_defaults[arg_name]
+        if current_value != default_value and current_value not in ("", None):
+            continue
+        for config_key in config_keys:
+            if config_key in config and config[config_key] is not None:
+                setattr(args, arg_name, config[config_key])
+                break
 
 
 def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
@@ -40,6 +166,7 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "states": list(config.states),
         "frame_skip": config.frame_skip,
         "max_pool_frames": config.max_pool_frames,
+        "sticky_action_prob": config.sticky_action_prob,
         "max_episode_steps": config.max_episode_steps,
         "observation_size": config.observation_size,
         "hud_crop_top": config.hud_crop_top,
@@ -158,13 +285,15 @@ def upload_s3_artifact(model_path: Path, destination_uri: str) -> None:
 def log_wandb_model_artifact(
     wandb_run,
     args: argparse.Namespace,
+    config: EnvConfig,
     model_path: Path,
     kind: str,
     aliases: list[str] | None = None,
 ) -> None:
-    if not wandb_artifacts_enabled(wandb_run, args):
-        return
     if not model_path.is_file():
+        return
+    sidecar_path = write_model_metadata(model_path, args, config, kind)
+    if not wandb_artifacts_enabled(wandb_run, args):
         return
 
     import wandb
@@ -177,6 +306,8 @@ def log_wandb_model_artifact(
         "kind": kind,
         "filename": model_path.name,
         "checkpoint_step": step,
+        "metadata_version": MODEL_METADATA_VERSION,
+        "env_config": env_config_metadata(config),
     }
     run_id = getattr(wandb_run, "id", None)
     if run_id:
@@ -201,6 +332,8 @@ def log_wandb_model_artifact(
         artifact.add_reference(reference_uri, name=model_path.name)
     else:
         artifact.add_file(str(model_path), name=model_path.name)
+    if sidecar_path is not None:
+        artifact.add_file(str(sidecar_path), name=sidecar_path.name)
     wandb_run.log_artifact(artifact, aliases=aliases)
     location = reference_uri or str(model_path)
     print(f"wandb artifact logged: {artifact_name} ({location})")
